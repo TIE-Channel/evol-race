@@ -32,12 +32,48 @@
     display: block;
     background: #b8e0ff;
   }
+  /* На мобильных в портретной ориентации - предупреждение перевернуть */
+  .rotate-msg {
+    position: fixed;
+    inset: 0;
+    background: #000;
+    color: #fff;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+    font-family: "Courier New", monospace;
+    text-align: center;
+    padding: 20px;
+    font-size: 16px;
+  }
+  @media (orientation: portrait) and (pointer: coarse) {
+    .rotate-msg { display: flex; }
+    .wrap { display: none; }
+  }
 </style>
 </head>
 <body>
+<div class="rotate-msg">
+  <div>
+    Поверните устройство горизонтально<br>
+    <br>
+    ROTATE YOUR DEVICE
+  </div>
+</div>
 <div class="wrap">
   <canvas id="game"></canvas>
 </div>
+<script>
+// Попытка зафиксировать landscape на мобильных при первом тапе
+function lockOrientation() {
+  if (screen.orientation && screen.orientation.lock) {
+    screen.orientation.lock('landscape').catch(() => {});
+  }
+}
+document.addEventListener('touchstart', lockOrientation, { once: true });
+document.addEventListener('click', lockOrientation, { once: true });
+</script>
 
 <script>
 (function () {
@@ -46,20 +82,8 @@
 
   // Размер канваса = размер окна. Игровое поле тянется во все стороны без растягивания спрайтов.
   function resizeCanvas() {
-    const winW = window.innerWidth;
-    const winH = window.innerHeight;
-    // На мобильных делаем canvas в 2 раза больше внутри -
-    // спрайты остаются того же размера в пикселях canvas,
-    // но визуально на экране выглядят в 2 раза мельче.
-    const isMobile = (typeof matchMedia !== 'undefined') &&
-                     matchMedia('(pointer: coarse)').matches;
-    const scale = isMobile ? 2 : 1;
-    canvas.width = winW * scale;
-    canvas.height = winH * scale;
-    if (canvas.style) {
-      canvas.style.width = winW + 'px';
-      canvas.style.height = winH + 'px';
-    }
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
     W = canvas.width;
     H = canvas.height;
     GROUND_Y = Math.floor(H / 2) + 80;
