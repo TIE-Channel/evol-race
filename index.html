@@ -491,10 +491,12 @@ document.addEventListener('click', lockOrientation, { once: true });
   let cometKickSignal = false;   // бочка (4/такт) - маленькие
   let cometSnareSignal = false;  // снэр (2/такт) - средние
   let cometPowerSignal = false;  // power chord (2/4такта) - большие
-  let cometCrashSignal = false;
-  let consecutivePowerChords = 0;  // крэш (1/4такта) - огромные агрессивные
+  let cometCrashSignal = false;   // крэш (1/4такта) - огромные агрессивные
   const comets = [];
   const newspapers = [];
+  // Погода - постоянно цикличная: листья, дождь, снег, нет
+  // Стартует с полной фазы 'none' (тишина), затем цикл leaves -> rain -> snow -> none
+  const weather = { type: 'none', timer: 2250, particles: [] };
   const COMET_TRAILS = { hh: 4, kick: 8, snare: 14, power: 22, crash: 32 };
 
   // Стая монстров - огр (самый большой) бежит последним, мелкий гоблин впереди
@@ -999,16 +1001,16 @@ document.addEventListener('click', lockOrientation, { once: true });
     const vibratoGain = audioCtx.createGain();
     vibratoGain.gain.value = 4;
     vibrato.connect(vibratoGain).connect(carrier.frequency);
-    // Общий вых-гейн (envelope)
+    // Общий вых-гейн (envelope) - громкость между прошлой и текущей
     const out = audioCtx.createGain();
     out.gain.setValueAtTime(0, t);
-    out.gain.linearRampToValueAtTime(0.45, t + 0.015);
-    out.gain.linearRampToValueAtTime(0.38, t + dur * 0.7);
+    out.gain.linearRampToValueAtTime(0.33, t + 0.015);
+    out.gain.linearRampToValueAtTime(0.27, t + dur * 0.7);
     out.gain.linearRampToValueAtTime(0, t + dur);
     out.connect(masterOut);
     // Прямой "сухой" сигнал чтобы голос звучал плотно
     const dryGain = audioCtx.createGain();
-    dryGain.gain.value = 0.12;
+    dryGain.gain.value = 0.09;
     carrier.connect(dryGain).connect(out);
     // Формантные фильтры
     for (let i = 0; i < formants.length; i++) {
@@ -1017,7 +1019,7 @@ document.addEventListener('click', lockOrientation, { once: true });
       filter.frequency.value = formants[i];
       filter.Q.value = 3 + i;
       const fg = audioCtx.createGain();
-      fg.gain.value = 0.7 / (i + 1);
+      fg.gain.value = 0.5 / (i + 1);
       carrier.connect(filter).connect(fg).connect(out);
     }
     carrier.start(t);
@@ -1365,14 +1367,8 @@ document.addEventListener('click', lockOrientation, { once: true });
     // Power chord по паттерну (мутирует с музыкой) - сюда ждём прыжок
     const cyclePos = absStep % 64;
     if (POWER_PATTERN[cyclePos]) {
-      // Не более 2 препятствий подряд
-      if (consecutivePowerChords < 2) {
-        pendingJumps.push({ step: absStep, type: 'cactus' });
-        cometPowerSignal = true;
-        consecutivePowerChords++;
-      } else {
-        consecutivePowerChords = 0;
-      }
+      pendingJumps.push({ step: absStep, type: 'cactus' });
+      cometPowerSignal = true;
     }
     // Crash на p=0 bar4=0 (раз в 4 такта) - сюда планируем ЯМУ + герой какает
     if (p === 0 && bar4 === 0 && absStep > 0) {
@@ -1552,6 +1548,10 @@ document.addEventListener('click', lockOrientation, { once: true });
     bossDefeated = 0;
     outroPendingTimer = 0;
     outroTimer = 0;
+    weather.type = 'none';
+    weather.timer = 2250;
+    weather.particles.length = 0;
+    weatherCycleIdx = 3;
     bgStage = 0;
     prevDayPhase = 0.15;
     // Сброс прогрессии музыки на исходную (минор A) и POWER_PATTERN
@@ -1897,6 +1897,9 @@ document.addEventListener('click', lockOrientation, { once: true });
       speed = Math.max(3.5, speed - 0.0003);
     }
     score += 0.15;
+
+    // Обновление погоды
+    updateWeather();
 
     // Финальный 19-й уровень - бежим без босса до outro
     if (outroPendingTimer > 0) {
@@ -6210,7 +6213,13 @@ document.addEventListener('click', lockOrientation, { once: true });
       const fx = fxStart + (fxEnd - fxStart) * flopT;
       const fy = GROUND_Y - 8;
       drawIntroFishToLizard(fx, fy, flopT);
+    } else if (t < 0.95) {
+      // Фаза 5: ящерица готова, идёт зум-аут до игрового масштаба
+      // Используем тот же спрайт что в финале трансформации (drawIntroFishToLizard с t=1)
+      // чтобы НЕ было скачка позиции при переходе с фазы 4
+      drawIntroFishToLizard(dino.x + dino.w / 2, GROUND_Y - 8, 1);
     } else {
+      // Финал: zoom уже = 1, переход к настоящему drawLizard для бесшовного старта игры
       drawLizard();
     }
 
@@ -6606,9 +6615,167 @@ document.addEventListener('click', lockOrientation, { once: true });
     for (const np of newspapers) drawNewspaper(np);
     for (const bf of butterflies) drawButterfly(bf);
     for (const b of bolts) drawBolt(b);
+    // Погода - дождь, снег, листья - поверх мира но под HUD
+    drawWeather();
     drawScore();
     if (state === STATE.INTRO) drawIntro();
     if (state === STATE.OVER) drawGameOver();
+  }
+
+  // ============ ПОГОДА ============
+  // Периодически случается дождь, снег или ветер с листьями
+  // Циклический порядок погоды (равные доли) - постоянная смена
+  const WEATHER_CYCLE = ['leaves', 'rain', 'snow', 'none'];
+  let weatherCycleIdx = 3; // стартуем с 'none' (через 25 сек начнётся листья)
+  const WEATHER_DURATION = 2250; // ~37.5 секунд каждое состояние
+
+  function updateWeather() {
+    if (weather.timer > 0) {
+      weather.timer--;
+    } else {
+      // Переход к следующему типу в цикле
+      weatherCycleIdx = (weatherCycleIdx + 1) % WEATHER_CYCLE.length;
+      weather.type = WEATHER_CYCLE[weatherCycleIdx];
+      weather.timer = WEATHER_DURATION;
+      if (weather.type !== 'none') prefillWeather();
+    }
+
+    // Спавн новых частиц - сверху по видимой области и чуть впереди (непрерывный поток)
+    if (weather.type === 'rain') {
+      // Дождь падает сверху по всей ширине экрана + полэкрана впереди
+      for (let i = 0; i < 8; i++) {
+        weather.particles.push({
+          type: 'rain',
+          x: Math.random() * (W * 2),
+          y: -20,
+          vxFactor: 1.3,
+          vy: 16
+        });
+      }
+    } else if (weather.type === 'snow') {
+      // Снег - частицы сверху каждый кадр, по всей ширине + 2 экрана впереди
+      for (let i = 0; i < 6; i++) {
+        weather.particles.push({
+          type: 'snow',
+          x: Math.random() * (W * 3),
+          y: -10,
+          vxFactor: 1.3,
+          vy: 2.5 + Math.random() * 1.5,
+          sz: 2 + Math.floor(Math.random() * 2),
+          seed: Math.random() * 100
+        });
+      }
+    } else if (weather.type === 'leaves' && frameCount % 4 === 0) {
+      const leafColors = ['#c87830', '#a04020', '#806020', '#d09040'];
+      weather.particles.push({
+        type: 'leaf',
+        x: W * 2 + Math.random() * W,
+        y: Math.random() * H * 0.8,
+        vxFactor: 1.2 + Math.random() * 0.4,
+        vy: -0.5 + Math.random() * 1,
+        rot: Math.random() * Math.PI * 2,
+        rotSpeed: -0.1 + Math.random() * 0.2,
+        color: leafColors[Math.floor(Math.random() * leafColors.length)],
+        seed: Math.random() * 100
+      });
+    }
+
+    // Обновление частиц - vx считается каждый кадр от текущей скорости мира
+    for (const p of weather.particles) {
+      const vx = -speed * p.vxFactor;
+      p.x += vx;
+      p.y += p.vy;
+      if (p.type === 'snow') {
+        p.x += Math.sin(frameCount * 0.04 + p.seed) * 0.3;
+      } else if (p.type === 'leaf') {
+        p.x += Math.sin(frameCount * 0.06 + p.seed) * 0.8;
+        p.y += Math.sin(frameCount * 0.04 + p.seed) * 0.3;
+        p.rot += p.rotSpeed;
+      }
+    }
+    // Удаляем за пределами экрана (только слева)
+    for (let i = weather.particles.length - 1; i >= 0; i--) {
+      const p = weather.particles[i];
+      if (p.x < -50 || p.y > H + 30) {
+        weather.particles.splice(i, 1);
+      }
+    }
+  }
+
+  // Initial fill - заполнить только зону впереди (1 экран справа от видимой)
+  // Дождь и снег "наплывают" с правой стороны - на видимом экране сначала пусто
+  function prefillWeather() {
+    if (weather.type === 'rain') {
+      // Дождь только в зоне впереди W..W*2
+      const count = Math.floor(W / 12);
+      for (let i = 0; i < count; i++) {
+        weather.particles.push({
+          type: 'rain',
+          x: W + Math.random() * W,
+          y: Math.random() * H,
+          vxFactor: 1.3,
+          vy: 16
+        });
+      }
+    } else if (weather.type === 'snow') {
+      // Снег только в зоне впереди W..W*2
+      const count = Math.floor(W / 10);
+      for (let i = 0; i < count; i++) {
+        weather.particles.push({
+          type: 'snow',
+          x: W + Math.random() * W,
+          y: Math.random() * H,
+          vxFactor: 1.3,
+          vy: 2.5 + Math.random() * 1.5,
+          sz: 2 + Math.floor(Math.random() * 2),
+          seed: Math.random() * 100
+        });
+      }
+    } else if (weather.type === 'leaves') {
+      // Листья только в зоне впереди W..W*2 - наплывают справа
+      const count = Math.floor(W / 80);
+      const leafColors = ['#c87830', '#a04020', '#806020', '#d09040'];
+      for (let i = 0; i < count; i++) {
+        weather.particles.push({
+          type: 'leaf',
+          x: W + Math.random() * W,
+          y: Math.random() * H * 0.8,
+          vxFactor: 1.2 + Math.random() * 0.4,
+          vy: -0.5 + Math.random() * 1,
+          rot: Math.random() * Math.PI * 2,
+          rotSpeed: -0.1 + Math.random() * 0.2,
+          color: leafColors[Math.floor(Math.random() * leafColors.length)],
+          seed: Math.random() * 100
+        });
+      }
+    }
+  }
+
+  function drawWeather() {
+    for (const p of weather.particles) {
+      if (p.type === 'rain') {
+        // Дождь - полупрозрачный голубоватый штрих, чуть контрастнее
+        ctx.strokeStyle = 'rgba(85,135,200,0.6)';
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.moveTo(p.x, p.y);
+        ctx.lineTo(p.x + speed * p.vxFactor * 0.8, p.y - 12);
+        ctx.stroke();
+      } else if (p.type === 'snow') {
+        // Снег - просто белый, без тёмной кантовки (мягкий)
+        ctx.fillStyle = 'rgba(255,255,255,0.85)';
+        ctx.fillRect(p.x, p.y, p.sz, p.sz);
+      } else if (p.type === 'leaf') {
+        ctx.save();
+        ctx.translate(p.x, p.y);
+        ctx.rotate(p.rot);
+        ctx.fillStyle = p.color;
+        ctx.fillRect(-3, -2, 6, 4);
+        ctx.fillStyle = 'rgba(0,0,0,0.2)';
+        ctx.fillRect(-3, 0, 6, 1);
+        ctx.restore();
+      }
+    }
   }
 
   function updateIntro() {
