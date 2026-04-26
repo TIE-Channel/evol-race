@@ -3,7 +3,7 @@ const CACHE_NAME = 'evolrace-cache-v74';
 const PRECACHE_URLS = [
   './',
   './index.html',
-  './manifest.json',
+  './manifest.webmanifest',
   './icon-192.png',
   './icon-512.png',
   './icon-maskable.png',
