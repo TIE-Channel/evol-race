@@ -8,7 +8,7 @@ on:
 jobs:
   build-apk:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 350
 
     steps:
       - name: Checkout repository
@@ -30,24 +30,16 @@ jobs:
         with:
           packages: 'platforms;android-34 build-tools;34.0.0 platform-tools'
 
-      - name: Cache Gradle dependencies
-        uses: actions/cache@v4
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
         with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-            ~/.android/build-cache
-          key: gradle-${{ runner.os }}-twa-v1
-          restore-keys: |
-            gradle-${{ runner.os }}-
+          cache-read-only: false
 
       - name: Cache npm
         uses: actions/cache@v4
         with:
           path: ~/.npm
-          key: npm-bubblewrap-v1
-          restore-keys: |
-            npm-bubblewrap-
+          key: npm-bubblewrap-v2
 
       - name: Install @bubblewrap/core
         run: |
@@ -90,26 +82,20 @@ jobs:
             const repoRoot = process.cwd();
             const manifestPath = path.join(repoRoot, 'twa-manifest.json');
             const projectDir = path.join(repoRoot, 'android-project');
-
-            console.log('=== TWA Build ===');
-            console.log('Repo:', repoRoot);
             const data = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
             const localIcon = path.join(repoRoot, 'icon-512.png');
             const localMaskable = path.join(repoRoot, 'icon-maskable.png');
+            console.log('=== TWA Build ===');
             console.log('icon-512.png:', fs.statSync(localIcon).size, 'bytes');
             console.log('icon-maskable.png:', fs.statSync(localMaskable).size, 'bytes');
-
             const { server, port } = await startLocalServer(repoRoot);
             data.iconUrl = 'http://127.0.0.1:' + port + '/icon-512.png';
             data.maskableIconUrl = 'http://127.0.0.1:' + port + '/icon-maskable.png';
-
             const core = require('@bubblewrap/core');
             const { TwaGenerator, TwaManifest } = core;
             console.log('@bubblewrap/core:', require('@bubblewrap/core/package.json').version);
-
             const twaManifest = new TwaManifest(data);
             if (!fs.existsSync(projectDir)) fs.mkdirSync(projectDir, { recursive: true });
-
             console.log('Generating Android project...');
             try {
               await new TwaGenerator().createTwaProject(projectDir, twaManifest);
@@ -126,6 +112,17 @@ jobs:
           JSEOF
           node _build-twa.js
           rm -f _build-twa.js
+
+      - name: Show generated Android project
+        run: |
+          echo "=== Project structure ==="
+          find android-project -maxdepth 2 -type f | head -30
+          echo "=== Gradle wrapper version ==="
+          cat android-project/gradle/wrapper/gradle-wrapper.properties || true
+          echo "=== build.gradle ==="
+          cat android-project/build.gradle || true
+          echo "=== app/build.gradle ==="
+          cat android-project/app/build.gradle | head -50 || true
 
       - name: Generate signing keystore
         run: |
@@ -147,38 +144,55 @@ jobs:
             -storepass android \
             -keypass android | grep -E "SHA256:" | head -1
 
-      - name: Configure Gradle for CI
+      - name: Configure Gradle for CI speed
         working-directory: android-project
         run: |
-          # Оптимизированные настройки Gradle для CI
           cat > gradle.properties << 'GRADLEEOF'
-          org.gradle.jvmargs=-Xmx4096m -XX:MaxMetaspaceSize=1024m -Dfile.encoding=UTF-8
+          org.gradle.jvmargs=-Xmx6144m -XX:MaxMetaspaceSize=2048m -Dfile.encoding=UTF-8
           org.gradle.parallel=true
           org.gradle.caching=true
           org.gradle.daemon=false
           org.gradle.configureondemand=false
+          org.gradle.workers.max=2
           android.useAndroidX=true
           android.enableJetifier=false
           kotlin.incremental=false
+          android.builder.sdkDownload=true
           GRADLEEOF
-          echo "=== gradle.properties ==="
           cat gradle.properties
-          echo "=== Gradle wrapper version ==="
-          cat gradle/wrapper/gradle-wrapper.properties || true
 
-      - name: Build APK with Gradle
+      - name: Build APK only (faster first build)
         working-directory: android-project
-        timeout-minutes: 60
+        timeout-minutes: 180
         run: |
           chmod +x gradlew
-          ./gradlew assembleRelease bundleRelease \
+          # Делаем первый прогрев - просто скачать зависимости
+          echo "=== Step 1: Resolve dependencies ==="
+          ./gradlew --no-daemon dependencies --info 2>&1 | tail -100 || true
+
+          echo ""
+          echo "=== Step 2: Build APK ==="
+          ./gradlew assembleRelease \
             -Pandroid.injected.signing.store.file=$(pwd)/android.keystore \
             -Pandroid.injected.signing.store.password=android \
             -Pandroid.injected.signing.key.alias=evolrace \
             -Pandroid.injected.signing.key.password=android \
+            --no-daemon \
             --build-cache \
-            --max-workers=2 \
-            --no-daemon
+            --info 2>&1 | tail -300
+
+      - name: Build AAB (only if APK succeeded)
+        if: success()
+        working-directory: android-project
+        timeout-minutes: 60
+        run: |
+          ./gradlew bundleRelease \
+            -Pandroid.injected.signing.store.file=$(pwd)/android.keystore \
+            -Pandroid.injected.signing.store.password=android \
+            -Pandroid.injected.signing.key.alias=evolrace \
+            -Pandroid.injected.signing.key.password=android \
+            --no-daemon \
+            --build-cache
 
       - name: Find generated artifacts
         if: always()
@@ -187,6 +201,9 @@ jobs:
           find android-project -name "*.apk" -type f 2>/dev/null
           echo "=== AABs ==="
           find android-project -name "*.aab" -type f 2>/dev/null
+          echo ""
+          echo "=== Gradle logs ==="
+          find android-project -name "*.log" -type f 2>/dev/null | head -10
 
       - name: Upload APK
         if: always()
@@ -205,3 +222,16 @@ jobs:
           path: android-project/app/build/outputs/bundle/release/*.aab
           if-no-files-found: warn
           retention-days: 30
+
+      - name: Upload Gradle build logs (для диагностики)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gradle-build-logs
+          path: |
+            android-project/build/reports/
+            android-project/app/build/reports/
+            android-project/.gradle/
+            ~/.gradle/daemon/*/daemon-*.out.log
+          if-no-files-found: ignore
+          retention-days: 7
