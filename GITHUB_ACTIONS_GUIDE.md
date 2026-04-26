@@ -1,0 +1,99 @@
+# Автоматическая сборка APK через GitHub Actions
+
+Этот репозиторий настроен на автоматическую сборку Android APK при каждом
+изменении главных файлов PWA. APK можно скачать как артефакт workflow.
+
+## Как это работает
+
+При push в ветку main или ручном запуске workflow:
+
+1. Устанавливается Node.js 20, Java 17, Android SDK 34
+2. Запускается `build-twa.js` который через @bubblewrap/core генерирует
+   Android Studio проект из `twa-manifest.json`
+3. Создаётся debug keystore для подписи
+4. Gradle собирает release APK и AAB
+5. Готовые файлы загружаются как артефакты
+
+## Как скачать APK
+
+1. Зайдите в репозиторий на GitHub: https://github.com/tie-channel/evolrace
+2. Кликните вкладку "Actions" сверху
+3. Выберите последний successful workflow run "Build Android APK"
+4. Внизу страницы в секции "Artifacts" будут:
+   - **evolrace-apk** — APK для прямой установки на Android
+   - **evolrace-aab** — Android App Bundle для Google Play
+   - **assetlinks-json** — файл который нужно положить на сайт
+
+## Запуск вручную
+
+1. На странице Actions откройте workflow "Build Android APK"
+2. Нажмите "Run workflow" (правый верхний угол)
+3. Подтвердите ветку main и нажмите зелёную кнопку
+
+## Установка APK на телефон
+
+1. Скачайте `evolrace-apk` из артефактов
+2. Распакуйте zip
+3. Перенесите .apk на Android устройство
+4. На устройстве: разрешите установку из неизвестных источников
+   (Settings → Security → Install Unknown Apps)
+5. Откройте .apk файл — установится приложение Evolrace
+
+## Важно: assetlinks.json для полноэкранного режима
+
+Без `assetlinks.json` приложение запускается с URL bar (видно адрес сайта).
+Чтобы убрать URL bar и сделать "настоящее" приложение:
+
+1. Скачайте артефакт `assetlinks-json`
+2. Создайте в репо папку `.well-known/`
+3. Положите туда `assetlinks.json`
+4. Закоммитьте и запушьте — после деплоя GitHub Pages должен возвращать
+   файл по URL: `https://tie-channel.github.io/.well-known/assetlinks.json`
+
+ВАЖНО: GitHub Pages **не индексирует папки начинающиеся с точки** по умолчанию.
+Нужно создать файл `.nojekyll` в корне репо чтобы GitHub Pages показывал
+папку `.well-known/`.
+
+Альтернатива: положить файл прямо как `assetlinks.json` в `.well-known`
+поддиректорию КОРНЕВОГО домена (`tie-channel.github.io`), но это другой
+репозиторий — `tie-channel.github.io` (нужно создать). Для подсайта
+`tie-channel.github.io/evolrace/` ассетлинкс должен быть на корне домена.
+
+## Production keystore
+
+Текущий keystore — debug (одноразовый, генерируется в каждом workflow run).
+Это значит что у каждого workflow run будет **разный** SHA-256 fingerprint
+и assetlinks.json становится невалидным после следующего билда.
+
+Для production:
+
+1. Сгенерируйте keystore локально или через любую машину один раз:
+   ```
+   keytool -genkeypair -dname "cn=Evolrace, ou=Apps, o=YourName, c=US" \
+     -alias evolrace -keypass YOUR_PASS \
+     -keystore production.keystore -storepass YOUR_PASS \
+     -validity 20000 -keyalg RSA -keysize 2048
+   ```
+
+2. Закодируйте keystore в base64:
+   ```
+   base64 -w 0 production.keystore > keystore.b64
+   ```
+
+3. В Settings репозитория → Secrets and variables → Actions добавьте:
+   - `SIGNING_KEYSTORE` = содержимое keystore.b64
+   - `SIGNING_KEYSTORE_PASSWORD` = ваш пароль
+   - `SIGNING_KEY_ALIAS` = evolrace
+   - `SIGNING_KEY_PASSWORD` = ваш пароль ключа
+
+4. Обновите workflow чтобы использовать эти secrets вместо одноразового
+   keystore (в `Generate signing keystore` шаге раскодируйте base64
+   вместо генерации). Я могу настроить если нужно — напишите.
+
+## Файлы для CI
+
+- `.github/workflows/build-apk.yml` — workflow GitHub Actions
+- `build-twa.js` — Node скрипт генерации TWA проекта
+- `twa-manifest.json` — конфигурация Android приложения
+
+Не удаляйте эти файлы из репо!
