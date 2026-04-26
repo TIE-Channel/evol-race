@@ -18,7 +18,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'npm'
 
       - name: Setup Java 17
         uses: actions/setup-java@v4
@@ -34,9 +33,16 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      - name: Cache npm
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-capacitor-v1-${{ hashFiles('package.json') }}
+          restore-keys: |
+            npm-capacitor-v1-
+
       - name: Install npm dependencies
-        run: |
-          npm install
+        run: npm install
 
       - name: Prepare web content (copy to www/)
         run: |
@@ -46,7 +52,11 @@ jobs:
 
       - name: Add Android platform to Capacitor
         run: |
-          npx cap add android
+          if [ ! -d "android" ]; then
+            npx cap add android
+          else
+            echo "android/ already exists, skipping cap add"
+          fi
           echo "=== android/ structure ==="
           find android -maxdepth 2 -type d | head -20
 
@@ -55,14 +65,9 @@ jobs:
 
       - name: Configure AdMob in AndroidManifest
         run: |
-          # Capacitor генерирует AndroidManifest.xml. Добавляем AdMob App ID
           ANDROID_MANIFEST="android/app/src/main/AndroidManifest.xml"
-
-          # Тестовый AdMob App ID (Google публичный): ca-app-pub-3940256099942544~3347511713
-          # Замените на ваш реальный AdMob App ID для production
           ADMOB_APP_ID="ca-app-pub-3940256099942544~3347511713"
 
-          # Добавляем meta-data в <application> блок если ещё нет
           if ! grep -q "com.google.android.gms.ads.APPLICATION_ID" "$ANDROID_MANIFEST"; then
             sed -i "/<application/,/>/ {
               /android:theme/a\\        <meta-data android:name=\"com.google.android.gms.ads.APPLICATION_ID\" android:value=\"$ADMOB_APP_ID\"/>
@@ -120,6 +125,7 @@ jobs:
             --build-cache
 
       - name: Build AAB
+        if: success()
         working-directory: android
         timeout-minutes: 30
         run: |
@@ -157,7 +163,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
-      - name: Upload build logs (для диагностики)
+      - name: Upload build logs
         if: failure()
         uses: actions/upload-artifact@v4
         with:
