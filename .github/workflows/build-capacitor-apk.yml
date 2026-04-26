@@ -58,6 +58,7 @@ jobs:
           cp icon-192.png www/ 2>/dev/null || true
           cp icon-512.png www/ 2>/dev/null || true
           cp icon-maskable.png www/ 2>/dev/null || true
+          cp tie-logo.png www/ 2>/dev/null || true
           echo "=== www/ contents ==="
           ls -la www/
 
@@ -230,18 +231,48 @@ jobs:
           echo "=== Updated MainActivity ==="
           cat "$MAIN_ACTIVITY"
 
-      - name: Configure AdMob in AndroidManifest
+      - name: Configure AdMob and orientation in AndroidManifest
         run: |
           ANDROID_MANIFEST="android/app/src/main/AndroidManifest.xml"
           ADMOB_APP_ID="ca-app-pub-3940256099942544~3347511713"
 
-          if ! grep -q "com.google.android.gms.ads.APPLICATION_ID" "$ANDROID_MANIFEST"; then
-            sed -i "/<application/,/>/ {
-              /android:theme/a\\        <meta-data android:name=\"com.google.android.gms.ads.APPLICATION_ID\" android:value=\"$ADMOB_APP_ID\"/>
-            }" "$ANDROID_MANIFEST"
-          fi
+          echo "=== Original AndroidManifest.xml ==="
+          cat "$ANDROID_MANIFEST"
 
-          echo "=== AndroidManifest.xml ==="
+          # Используем Python для надёжной модификации XML
+          python3 << PYEOF
+          import re
+
+          with open("$ANDROID_MANIFEST", "r") as f:
+              content = f.read()
+
+          # 1. Добавляем AdMob meta-data в <application> если ещё нет
+          if "com.google.android.gms.ads.APPLICATION_ID" not in content:
+              admob_meta = '<meta-data android:name="com.google.android.gms.ads.APPLICATION_ID" android:value="$ADMOB_APP_ID" />'
+              # Вставляем перед закрывающим </application>
+              content = content.replace(
+                  '</application>',
+                  '    ' + admob_meta + '\n    </application>'
+              )
+
+          # 2. Добавляем screenOrientation и configChanges к <activity>
+          # Поддерживает multiline atribute syntax
+          if 'android:screenOrientation' not in content:
+              content = re.sub(
+                  r'(<activity\b)',
+                  r'\1\n            android:screenOrientation="sensorLandscape"\n            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"',
+                  content,
+                  count=1
+              )
+
+          with open("$ANDROID_MANIFEST", "w") as f:
+              f.write(content)
+
+          print("Manifest updated successfully")
+          PYEOF
+
+          echo ""
+          echo "=== Updated AndroidManifest.xml ==="
           cat "$ANDROID_MANIFEST"
 
       - name: Generate signing keystore
