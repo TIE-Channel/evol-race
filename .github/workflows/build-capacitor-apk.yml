@@ -249,21 +249,44 @@ jobs:
           # 1. Добавляем AdMob meta-data в <application> если ещё нет
           if "com.google.android.gms.ads.APPLICATION_ID" not in content:
               admob_meta = '<meta-data android:name="com.google.android.gms.ads.APPLICATION_ID" android:value="$ADMOB_APP_ID" />'
-              # Вставляем перед закрывающим </application>
               content = content.replace(
                   '</application>',
                   '    ' + admob_meta + '\n    </application>'
               )
 
-          # 2. Добавляем screenOrientation и configChanges к <activity>
-          # Поддерживает multiline atribute syntax
-          if 'android:screenOrientation' not in content:
+          # 2. screenOrientation: добавляем или заменяем
+          if 'android:screenOrientation=' in content:
+              # Заменяем существующее значение
+              content = re.sub(
+                  r'android:screenOrientation="[^"]*"',
+                  'android:screenOrientation="sensorLandscape"',
+                  content
+              )
+              print("Replaced existing screenOrientation")
+          else:
+              # Добавляем новый атрибут к <activity>
               content = re.sub(
                   r'(<activity\b)',
-                  r'\1\n            android:screenOrientation="sensorLandscape"\n            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"',
+                  r'\1\n            android:screenOrientation="sensorLandscape"',
                   content,
                   count=1
               )
+              print("Added new screenOrientation")
+
+          # 3. configChanges: только заменяем если уже есть (Capacitor добавляет по умолчанию)
+          # Не дублируем атрибут чтобы не сломать manifest
+          if 'android:configChanges=' in content:
+              # Уже есть от Capacitor - оставляем как есть, манифест валиден
+              print("configChanges already exists (from Capacitor default), leaving as is")
+          else:
+              # Если внезапно нет - добавляем
+              content = re.sub(
+                  r'(<activity\b)',
+                  r'\1\n            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"',
+                  content,
+                  count=1
+              )
+              print("Added new configChanges")
 
           with open("$ANDROID_MANIFEST", "w") as f:
               f.write(content)
