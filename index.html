@@ -89,14 +89,14 @@
   </div>
 </div>
 <script>
-  // Скрываем splash через 2.5 сек
+  // Скрываем splash через 5 сек
   setTimeout(function() {
     var splash = document.getElementById('tie-splash');
     if (splash) {
       splash.style.opacity = '0';
       setTimeout(function() { splash.style.display = 'none'; }, 700);
     }
-  }, 2500);
+  }, 5000);
 </script>
 <div class="rotate-msg">
   <div>
@@ -8672,6 +8672,14 @@ document.addEventListener('click', lockOrientation, { once: true });
   Remove Ads $1.99
 </button>
 
+<!-- Декоративная рамка вокруг banner рекламы внизу -->
+<!-- Native AdMob banner рисуется поверх WebView, эта рамка чуть больше его и видна по краям -->
+<div id="ad-banner-frame" style="display:none;position:fixed;bottom:4px;left:50%;transform:translateX(-50%);
+  width:336px;height:66px;border:2px solid #1060a0;border-radius:8px;
+  background:linear-gradient(to bottom, rgba(16,96,160,0.15), rgba(16,96,160,0.35));
+  box-shadow:0 -2px 8px rgba(0,0,0,0.2), inset 0 0 0 1px rgba(255,255,255,0.4);
+  z-index:999;pointer-events:none;"></div>
+
 <!-- Уведомление "Спасибо за покупку" -->
 <div id="purchase-thanks" style="display:none;position:fixed;top:50px;left:50%;transform:translateX(-50%);
   z-index:3000;padding:12px 24px;background:#1060a0;color:#fff;border-radius:4px;font-family:sans-serif;
@@ -8716,7 +8724,6 @@ document.addEventListener('click', lockOrientation, { once: true });
   let lastGameState = null;
   let gameOverCount = 0;
   let bannerShown = false;
-  let interstitialReady = false;
   let isCapacitor = false;
 
   const removeAdsBtn = document.getElementById('remove-ads-btn');
@@ -8728,6 +8735,8 @@ document.addEventListener('click', lockOrientation, { once: true });
   }
 
   // === ADMOB через Capacitor ===
+  let interstitialLoaded = false;
+
   async function initAdMob() {
     if (!detectCapacitor()) {
       console.log('[Ads] Capacitor AdMob not available (running in browser)');
@@ -8743,7 +8752,34 @@ document.addEventListener('click', lockOrientation, { once: true });
       console.log('[Ads] AdMob initialized');
       isCapacitor = true;
 
-      // Прелоадим первый interstitial чтобы показ был мгновенным
+      // === События AdMob для надёжного отслеживания состояния ===
+      // Когда interstitial реклама полностью загружена
+      AdMob.addListener('interstitialAdLoaded', () => {
+        console.log('[Ads] Interstitial loaded');
+        interstitialLoaded = true;
+      });
+
+      // Когда interstitial не удалось загрузить
+      AdMob.addListener('interstitialAdFailedToLoad', (err) => {
+        console.warn('[Ads] Interstitial failed to load:', err);
+        interstitialLoaded = false;
+        // Retry через 10 сек
+        setTimeout(prepareInterstitial, 10000);
+      });
+
+      // Когда interstitial был закрыт пользователем
+      AdMob.addListener('interstitialAdDismissed', () => {
+        console.log('[Ads] Interstitial dismissed');
+        interstitialLoaded = false;
+        // Сразу готовим следующий
+        prepareInterstitial();
+      });
+
+      // Banner события для отладки
+      AdMob.addListener('bannerAdLoaded', () => console.log('[Ads] Banner loaded'));
+      AdMob.addListener('bannerAdFailedToLoad', (err) => console.warn('[Ads] Banner failed:', err));
+
+      // Прелоадим первый interstitial
       prepareInterstitial();
       return true;
     } catch (e) {
@@ -8754,47 +8790,60 @@ document.addEventListener('click', lockOrientation, { once: true });
 
   async function prepareInterstitial() {
     if (!isCapacitor || adsRemoved) return;
+    if (interstitialLoaded) return; // уже готов
     try {
       const { AdMob } = window.Capacitor.Plugins;
       await AdMob.prepareInterstitial({
         adId: AD_IDS.interstitial,
         isTesting: IS_TEST_MODE
       });
-      interstitialReady = true;
-      console.log('[Ads] Interstitial prepared');
+      // interstitialLoaded будет установлен в true когда придёт event interstitialAdLoaded
+      console.log('[Ads] prepareInterstitial requested');
     } catch (e) {
       console.warn('[Ads] prepareInterstitial error:', e);
-      interstitialReady = false;
+      interstitialLoaded = false;
     }
   }
 
   async function showBannerAd() {
-    if (!isCapacitor || adsRemoved || bannerShown) return;
+    if (!isCapacitor || adsRemoved) return;
     try {
-      const { AdMob, BannerAdSize, BannerAdPosition } = window.Capacitor.Plugins;
+      const { AdMob } = window.Capacitor.Plugins;
+      // Margin 8 dp - между банером и нижним краем экрана будет место для рамки
       await AdMob.showBanner({
         adId: AD_IDS.banner,
-        adSize: 'BANNER',           // 320x50
-        position: 'BOTTOM_CENTER',  // Внизу - стандартная позиция
-        margin: 0,
+        adSize: 'BANNER',
+        position: 'BOTTOM_CENTER',
+        margin: 8,
         isTesting: IS_TEST_MODE
       });
       bannerShown = true;
       console.log('[Ads] Banner shown');
+      // Показываем декоративную HTML рамку вокруг banner места
+      const frame = document.getElementById('ad-banner-frame');
+      if (frame) frame.style.display = 'block';
     } catch (e) {
       console.warn('[Ads] showBanner error:', e);
+      bannerShown = false;
     }
   }
 
   async function hideBannerAd() {
-    if (!isCapacitor || !bannerShown) return;
+    if (!isCapacitor) return;
+    // Скрываем декоративную рамку
+    const frame = document.getElementById('ad-banner-frame');
+    if (frame) frame.style.display = 'none';
     try {
       const { AdMob } = window.Capacitor.Plugins;
-      await AdMob.hideBanner();
-      bannerShown = false;
+      await AdMob.removeBanner();
+      console.log('[Ads] Banner removed');
     } catch (e) {
-      console.warn('[Ads] hideBanner error:', e);
+      console.warn('[Ads] removeBanner error:', e);
+      try {
+        await window.Capacitor.Plugins.AdMob.hideBanner();
+      } catch (e2) {}
     }
+    bannerShown = false;
   }
 
   async function showInterstitialAd() {
@@ -8802,18 +8851,33 @@ document.addEventListener('click', lockOrientation, { once: true });
     try {
       const { AdMob } = window.Capacitor.Plugins;
 
-      if (!interstitialReady) {
-        await prepareInterstitial();
+      // Если ещё не загружен - запросим и подождём до 5 сек
+      if (!interstitialLoaded) {
+        console.log('[Ads] Interstitial not loaded yet, requesting...');
+        prepareInterstitial();
+
+        let waitedMs = 0;
+        const stepMs = 200;
+        const maxWaitMs = 5000;
+        while (!interstitialLoaded && waitedMs < maxWaitMs) {
+          await new Promise(resolve => setTimeout(resolve, stepMs));
+          waitedMs += stepMs;
+        }
+
+        if (!interstitialLoaded) {
+          console.warn('[Ads] Interstitial timeout after', maxWaitMs, 'ms');
+          return;
+        }
       }
 
+      console.log('[Ads] Showing interstitial');
       await AdMob.showInterstitial();
-      console.log('[Ads] Interstitial shown');
-      interstitialReady = false;
-
-      // Сразу готовим следующий
-      setTimeout(prepareInterstitial, 1000);
+      interstitialLoaded = false; // после показа нужно prepare заново (это сделает event dismissed)
     } catch (e) {
       console.warn('[Ads] showInterstitial error:', e);
+      interstitialLoaded = false;
+      // Готовим следующий через 5 сек
+      setTimeout(prepareInterstitial, 5000);
     }
   }
 
@@ -8881,6 +8945,9 @@ document.addEventListener('click', lockOrientation, { once: true });
     adsRemoved = true;
     localStorage.setItem('evolrace_ads_removed', '1');
     hideBannerAd();
+    // Явно скрываем декоративную рамку (на случай если hideBannerAd не вызвался)
+    const frame = document.getElementById('ad-banner-frame');
+    if (frame) frame.style.display = 'none';
     removeAdsBtn.style.display = 'none';
     console.log('[IAP] Ads removed activated');
   }
@@ -8909,15 +8976,26 @@ document.addEventListener('click', lockOrientation, { once: true });
         }
         if (!adsRemoved) {
           removeAdsBtn.style.display = 'block';
+        } else {
+          // Дополнительная защита - если ads removed, прячем рамку и кнопку
+          const frame = document.getElementById('ad-banner-frame');
+          if (frame) frame.style.display = 'none';
+          removeAdsBtn.style.display = 'none';
         }
       } else if (currentState === STATE.RUN) {
         // Скрываем баннер во время игры (чтобы не мешал)
         hideBannerAd();
         removeAdsBtn.style.display = 'none';
-      } else if (currentState === STATE.OVER && !adsRemoved) {
-        // На OVER экране - снова баннер и кнопка
-        if (isCapacitor) showBannerAd();
-        removeAdsBtn.style.display = 'block';
+      } else if (currentState === STATE.OVER) {
+        if (!adsRemoved) {
+          if (isCapacitor) showBannerAd();
+          removeAdsBtn.style.display = 'block';
+        } else {
+          // ads removed - всё скрыто
+          const frame = document.getElementById('ad-banner-frame');
+          if (frame) frame.style.display = 'none';
+          removeAdsBtn.style.display = 'none';
+        }
       }
 
       lastGameState = currentState;
