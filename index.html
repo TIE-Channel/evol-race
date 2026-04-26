@@ -7,7 +7,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black">
 <meta name="theme-color" content="#b8e0ff">
-<link rel="manifest" href="/evolrace/manifest.json">
+<link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icon-192.png">
 <title>Evolrace</title>
 <style>
@@ -1568,10 +1568,10 @@ document.addEventListener('click', lockOrientation, { once: true });
     if (!audioCtx) return;
     const t0 = audioCtx.currentTime + 0.1;
 
-    // === БУЛЬКАНЬЕ - короткие "плоп" звуки в первые 2.5 секунды (до выныривания) ===
+    // === БУЛЬКАНЬЕ - короткие "плоп" звуки в первые 1.5 секунды (до выныривания) ===
     for (let i = 0; i < 12; i++) {
-      const bt = t0 + 0.2 + i * 0.18 + Math.random() * 0.1;
-      if (bt > t0 + 2.5) break;
+      const bt = t0 + 0.1 + i * 0.11 + Math.random() * 0.06;
+      if (bt > t0 + 0.5) break;
       const bubbleOsc = audioCtx.createOscillator();
       bubbleOsc.type = 'sine';
       const startFreq = 600 + Math.random() * 600;
@@ -1586,8 +1586,8 @@ document.addEventListener('click', lockOrientation, { once: true });
       bubbleOsc.stop(bt + 0.15);
     }
 
-    // === ВЫРАЖЕННЫЙ ВСПЛЕСК - на 2.7 сек когда рыба выпрыгивает из воды ===
-    const splashT = t0 + 2.7;
+    // === ВЫРАЖЕННЫЙ ВСПЛЕСК - на 1.7 сек когда рыба выпрыгивает из воды ===
+    const splashT = t0 + 0.7;
 
     // 1) Большой высокочастотный шум - "разбрызгивание"
     const splashLen1 = 0.6;
@@ -8573,7 +8573,7 @@ document.addEventListener('click', lockOrientation, { once: true });
 <script>
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/evolrace/sw.js').catch(() => {});
+    navigator.serviceWorker.register('sw.js').catch(() => {});
   });
 }
 (function() {

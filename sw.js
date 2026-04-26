@@ -1,5 +1,5 @@
 // Service worker для офлайн работы PWA
-const CACHE = 'evolrace-v70';
+const CACHE = 'evolrace-v73';
 const FILES = [
   './',
   './index.html',
