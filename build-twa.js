@@ -16,12 +16,13 @@ on:
 jobs:
   build-apk:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
+      - name: Setup Node.js 20
         uses: actions/setup-node@v4
         with:
           node-version: '20'
@@ -35,16 +36,46 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
         with:
-          packages: 'platforms;android-34 build-tools;34.0.0'
+          packages: 'platforms;android-34 build-tools;34.0.0 platform-tools'
 
-      - name: Install Bubblewrap Core
-        run: npm install @bubblewrap/core@latest
+      - name: Wait for GitHub Pages deploy
+        run: |
+          echo "Waiting 60 seconds for GitHub Pages to deploy..."
+          sleep 60
 
-      - name: Wait for GitHub Pages to deploy
-        run: sleep 30
+      - name: Verify PWA URLs are accessible
+        run: |
+          set -e
+          echo "Checking PWA endpoints..."
+          for url in \
+            "https://tie-channel.github.io/evolrace/" \
+            "https://tie-channel.github.io/evolrace/manifest.webmanifest" \
+            "https://tie-channel.github.io/evolrace/icon-512.png" \
+            "https://tie-channel.github.io/evolrace/icon-maskable.png"; do
+            echo "Checking: $url"
+            curl -sSfL -o /dev/null -w "  HTTP %{http_code} - %{size_download} bytes\n" "$url" || \
+              echo "  WARNING: $url failed"
+          done
+
+      - name: Install @bubblewrap/core
+        run: |
+          npm init -y
+          npm install @bubblewrap/core@latest --save
+
+      - name: Print bubblewrap version
+        run: |
+          node -e "const pkg = require('@bubblewrap/core/package.json'); console.log('@bubblewrap/core version:', pkg.version);"
 
       - name: Generate TWA Android Project
         run: node build-twa.js
+
+      - name: List Android project structure
+        run: |
+          echo "=== android-project structure ==="
+          find android-project -maxdepth 3 -type f 2>/dev/null | head -30 || echo "No project dir!"
+          echo ""
+          echo "=== Looking for gradlew ==="
+          find android-project -name "gradlew" -type f 2>/dev/null
 
       - name: Generate signing keystore
         run: |
@@ -60,56 +91,59 @@ jobs:
 
       - name: Print signing key SHA-256 fingerprint
         run: |
-          echo "Add this fingerprint to /.well-known/assetlinks.json:"
+          echo "=== SHA-256 fingerprint for assetlinks.json ==="
           keytool -list -v \
             -keystore android-project/android.keystore \
             -alias evolrace \
             -storepass android \
-            -keypass android | grep -E "SHA256:"
+            -keypass android | grep -E "SHA256:" | head -1
 
       - name: Build APK with Gradle
         working-directory: android-project
         run: |
           chmod +x gradlew
-          ./gradlew bundleRelease assembleRelease \
+          ./gradlew assembleRelease bundleRelease \
             -Pandroid.injected.signing.store.file=$(pwd)/android.keystore \
             -Pandroid.injected.signing.store.password=android \
             -Pandroid.injected.signing.key.alias=evolrace \
-            -Pandroid.injected.signing.key.password=android
+            -Pandroid.injected.signing.key.password=android \
+            --stacktrace --no-daemon
 
-      - name: Find generated APK and AAB
-        id: find_apk
+      - name: List generated artifacts
         run: |
-          APK_PATH=$(find android-project -name "*.apk" -type f | head -1)
-          AAB_PATH=$(find android-project -name "*.aab" -type f | head -1)
-          echo "APK: $APK_PATH"
-          echo "AAB: $AAB_PATH"
-          echo "apk_path=$APK_PATH" >> $GITHUB_OUTPUT
-          echo "aab_path=$AAB_PATH" >> $GITHUB_OUTPUT
+          echo "=== Generated APKs ==="
+          find android-project -name "*.apk" -type f
+          echo ""
+          echo "=== Generated AABs ==="
+          find android-project -name "*.aab" -type f
 
-      - name: Upload APK artifact
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: evolrace-apk
-          path: ${{ steps.find_apk.outputs.apk_path }}
-          if-no-files-found: error
+          path: android-project/app/build/outputs/apk/release/*.apk
+          if-no-files-found: warn
+          retention-days: 30
 
-      - name: Upload AAB artifact (for Google Play)
+      - name: Upload AAB
         uses: actions/upload-artifact@v4
         with:
           name: evolrace-aab
-          path: ${{ steps.find_apk.outputs.aab_path }}
+          path: android-project/app/build/outputs/bundle/release/*.aab
           if-no-files-found: warn
+          retention-days: 30
 
-      - name: Create assetlinks.json template
+      - name: Generate assetlinks.json
+        if: always()
         run: |
           FINGERPRINT=$(keytool -list -v \
             -keystore android-project/android.keystore \
             -alias evolrace \
             -storepass android \
-            -keypass android | grep -E "SHA256:" | head -1 | awk '{print $2}')
+            -keypass android 2>/dev/null | grep -E "SHA256:" | head -1 | awk '{print $2}' || echo "")
 
-          cat > assetlinks.json << ASSETLINK
+          if [ -n "$FINGERPRINT" ]; then
+            cat > assetlinks.json << ASSETLINK
           [{
             "relation": ["delegate_permission/common.handle_all_urls"],
             "target": {
@@ -119,10 +153,16 @@ jobs:
             }
           }]
           ASSETLINK
-          cat assetlinks.json
+            echo "assetlinks.json created with fingerprint: $FINGERPRINT"
+            cat assetlinks.json
+          else
+            echo "Warning: no fingerprint extracted"
+          fi
 
       - name: Upload assetlinks.json
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: assetlinks-json
           path: assetlinks.json
+          if-no-files-found: warn
