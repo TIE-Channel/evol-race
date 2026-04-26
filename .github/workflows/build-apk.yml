@@ -3,14 +3,6 @@ name: Build Android APK
 on:
   push:
     branches: [main]
-    paths:
-      - 'manifest.webmanifest'
-      - 'index.html'
-      - 'sw.js'
-      - 'icon-*.png'
-      - '.github/workflows/build-apk.yml'
-      - 'twa-manifest.json'
-      - 'build-twa.js'
   workflow_dispatch:
 
 jobs:
@@ -38,44 +30,99 @@ jobs:
         with:
           packages: 'platforms;android-34 build-tools;34.0.0 platform-tools'
 
-      - name: Wait for GitHub Pages deploy
-        run: |
-          echo "Waiting 60 seconds for GitHub Pages to deploy..."
-          sleep 60
-
-      - name: Verify PWA URLs are accessible
-        run: |
-          set -e
-          echo "Checking PWA endpoints..."
-          for url in \
-            "https://tie-channel.github.io/evolrace/" \
-            "https://tie-channel.github.io/evolrace/manifest.webmanifest" \
-            "https://tie-channel.github.io/evolrace/icon-512.png" \
-            "https://tie-channel.github.io/evolrace/icon-maskable.png"; do
-            echo "Checking: $url"
-            curl -sSfL -o /dev/null -w "  HTTP %{http_code} - %{size_download} bytes\n" "$url" || \
-              echo "  WARNING: $url failed"
-          done
-
       - name: Install @bubblewrap/core
         run: |
           npm init -y
-          npm install @bubblewrap/core@latest --save
-
-      - name: Print bubblewrap version
-        run: |
-          node -e "const pkg = require('@bubblewrap/core/package.json'); console.log('@bubblewrap/core version:', pkg.version);"
+          npm install @bubblewrap/core@latest
 
       - name: Generate TWA Android Project
-        run: node build-twa.js
-
-      - name: List Android project structure
         run: |
-          echo "=== android-project structure ==="
-          find android-project -maxdepth 3 -type f 2>/dev/null | head -30 || echo "No project dir!"
-          echo ""
-          echo "=== Looking for gradlew ==="
-          find android-project -name "gradlew" -type f 2>/dev/null
+          cat > /tmp/build-twa.js << 'JSEOF'
+          const path = require('path');
+          const fs = require('fs');
+          const http = require('http');
+
+          function startLocalServer(repoRoot) {
+            return new Promise((resolve, reject) => {
+              const filesMap = {
+                '/icon-512.png': path.join(repoRoot, 'icon-512.png'),
+                '/icon-maskable.png': path.join(repoRoot, 'icon-maskable.png')
+              };
+              const server = http.createServer((req, res) => {
+                console.log('  [HTTP] ' + req.method + ' ' + req.url);
+                const fp = filesMap[req.url];
+                if (fp && fs.existsSync(fp)) {
+                  const data = fs.readFileSync(fp);
+                  res.writeHead(200, { 'Content-Type': 'image/png', 'Content-Length': data.length });
+                  res.end(data);
+                } else {
+                  res.writeHead(404); res.end('Not found');
+                }
+              });
+              server.on('error', reject);
+              server.listen(0, '127.0.0.1', () => {
+                console.log('  Local HTTP server: http://127.0.0.1:' + server.address().port);
+                resolve({ server, port: server.address().port });
+              });
+            });
+          }
+
+          (async () => {
+            const repoRoot = process.cwd();
+            const manifestPath = path.join(repoRoot, 'twa-manifest.json');
+            const projectDir = path.join(repoRoot, 'android-project');
+
+            console.log('=== TWA Build ===');
+            console.log('Repo:', repoRoot);
+            console.log('Manifest exists:', fs.existsSync(manifestPath));
+
+            if (!fs.existsSync(manifestPath)) {
+              console.error('ERROR: twa-manifest.json не найден');
+              process.exit(1);
+            }
+
+            const data = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+            const localIcon = path.join(repoRoot, 'icon-512.png');
+            const localMaskable = path.join(repoRoot, 'icon-maskable.png');
+
+            if (!fs.existsSync(localIcon) || !fs.existsSync(localMaskable)) {
+              console.error('ERROR: иконки отсутствуют');
+              process.exit(1);
+            }
+            console.log('icon-512.png:', fs.statSync(localIcon).size, 'bytes');
+            console.log('icon-maskable.png:', fs.statSync(localMaskable).size, 'bytes');
+
+            const { server, port } = await startLocalServer(repoRoot);
+            data.iconUrl = 'http://127.0.0.1:' + port + '/icon-512.png';
+            data.maskableIconUrl = 'http://127.0.0.1:' + port + '/icon-maskable.png';
+
+            const core = require('@bubblewrap/core');
+            const { TwaGenerator, TwaManifest } = core;
+            console.log('@bubblewrap/core:', require('@bubblewrap/core/package.json').version);
+
+            const twaManifest = new TwaManifest(data);
+            console.log('TwaManifest OK');
+
+            if (!fs.existsSync(projectDir)) fs.mkdirSync(projectDir, { recursive: true });
+
+            console.log('Generating Android project...');
+            try {
+              await new TwaGenerator().createTwaProject(projectDir, twaManifest);
+              console.log('Generated OK');
+            } finally {
+              server.close();
+            }
+
+            fs.copyFileSync(manifestPath, path.join(projectDir, 'twa-manifest.json'));
+            console.log('Files in project:');
+            fs.readdirSync(projectDir).forEach(f => console.log('  ' + f));
+          })().catch(err => {
+            console.error('FATAL:', err);
+            console.error(err.stack);
+            process.exit(1);
+          });
+          JSEOF
+          node /tmp/build-twa.js
 
       - name: Generate signing keystore
         run: |
@@ -89,16 +136,15 @@ jobs:
             -keyalg RSA \
             -keysize 2048
 
-      - name: Print signing key SHA-256 fingerprint
+      - name: Print signing fingerprint
         run: |
-          echo "=== SHA-256 fingerprint for assetlinks.json ==="
           keytool -list -v \
             -keystore android-project/android.keystore \
             -alias evolrace \
             -storepass android \
             -keypass android | grep -E "SHA256:" | head -1
 
-      - name: Build APK with Gradle
+      - name: Build APK
         working-directory: android-project
         run: |
           chmod +x gradlew
@@ -109,12 +155,11 @@ jobs:
             -Pandroid.injected.signing.key.password=android \
             --stacktrace --no-daemon
 
-      - name: List generated artifacts
+      - name: Find generated artifacts
         run: |
-          echo "=== Generated APKs ==="
+          echo "=== APKs ==="
           find android-project -name "*.apk" -type f
-          echo ""
-          echo "=== Generated AABs ==="
+          echo "=== AABs ==="
           find android-project -name "*.aab" -type f
 
       - name: Upload APK
@@ -132,37 +177,3 @@ jobs:
           path: android-project/app/build/outputs/bundle/release/*.aab
           if-no-files-found: warn
           retention-days: 30
-
-      - name: Generate assetlinks.json
-        if: always()
-        run: |
-          FINGERPRINT=$(keytool -list -v \
-            -keystore android-project/android.keystore \
-            -alias evolrace \
-            -storepass android \
-            -keypass android 2>/dev/null | grep -E "SHA256:" | head -1 | awk '{print $2}' || echo "")
-
-          if [ -n "$FINGERPRINT" ]; then
-            cat > assetlinks.json << ASSETLINK
-          [{
-            "relation": ["delegate_permission/common.handle_all_urls"],
-            "target": {
-              "namespace": "android_app",
-              "package_name": "io.github.tiechannel.evolrace",
-              "sha256_cert_fingerprints": ["$FINGERPRINT"]
-            }
-          }]
-          ASSETLINK
-            echo "assetlinks.json created with fingerprint: $FINGERPRINT"
-            cat assetlinks.json
-          else
-            echo "Warning: no fingerprint extracted"
-          fi
-
-      - name: Upload assetlinks.json
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: assetlinks-json
-          path: assetlinks.json
-          if-no-files-found: warn
