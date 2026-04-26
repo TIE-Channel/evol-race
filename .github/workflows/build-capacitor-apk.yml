@@ -25,6 +25,11 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
+      - name: Install ImageMagick (для генерации иконок)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y imagemagick
+
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
         with:
@@ -37,9 +42,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.npm
-          key: npm-capacitor-v1-${{ hashFiles('package.json') }}
+          key: npm-capacitor-v2-${{ hashFiles('package.json') }}
           restore-keys: |
-            npm-capacitor-v1-
+            npm-capacitor-v2-
 
       - name: Install npm dependencies
         run: npm install
@@ -63,11 +68,167 @@ jobs:
           else
             echo "android/ already exists, skipping cap add"
           fi
-          echo "=== android/ structure ==="
-          find android -maxdepth 2 -type d | head -20
 
       - name: Sync Capacitor
         run: npx cap sync android
+
+      - name: Generate Android app icons
+        run: |
+          # Создаём папки mipmap для разных плотностей экрана
+          for density in mdpi hdpi xhdpi xxhdpi xxxhdpi; do
+            mkdir -p android/app/src/main/res/mipmap-$density
+          done
+
+          # Размеры иконок для каждой плотности
+          declare -A SIZES=(
+            ["mdpi"]=48
+            ["hdpi"]=72
+            ["xhdpi"]=96
+            ["xxhdpi"]=144
+            ["xxxhdpi"]=192
+          )
+
+          # Генерируем ic_launcher.png (стандартная) и ic_launcher_round.png (круглая)
+          for density in "${!SIZES[@]}"; do
+            size=${SIZES[$density]}
+            convert icon-512.png -resize ${size}x${size} \
+              android/app/src/main/res/mipmap-$density/ic_launcher.png
+
+            # Круглая иконка - Android клиппинг сделает сам, или вручную с маской
+            convert icon-512.png -resize ${size}x${size} \
+              android/app/src/main/res/mipmap-$density/ic_launcher_round.png
+
+            # Adaptive icon foreground (108dp = размер*2 примерно)
+            adaptive_size=$((size * 108 / 48))
+            convert icon-512.png -resize ${adaptive_size}x${adaptive_size} \
+              android/app/src/main/res/mipmap-$density/ic_launcher_foreground.png
+
+            echo "Generated icons for $density (${size}x${size})"
+          done
+
+          # Adaptive icon XML для Android 8+
+          mkdir -p android/app/src/main/res/mipmap-anydpi-v26
+          cat > android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml << 'XMLEOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+              <background android:drawable="@color/ic_launcher_background"/>
+              <foreground android:drawable="@mipmap/ic_launcher_foreground"/>
+          </adaptive-icon>
+          XMLEOF
+
+          cat > android/app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml << 'XMLEOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+              <background android:drawable="@color/ic_launcher_background"/>
+              <foreground android:drawable="@mipmap/ic_launcher_foreground"/>
+          </adaptive-icon>
+          XMLEOF
+
+          # Цвет фона adaptive иконки
+          mkdir -p android/app/src/main/res/values
+          if [ -f android/app/src/main/res/values/ic_launcher_background.xml ]; then
+            rm android/app/src/main/res/values/ic_launcher_background.xml
+          fi
+          cat > android/app/src/main/res/values/ic_launcher_background.xml << 'XMLEOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <color name="ic_launcher_background">#b8e0ff</color>
+          </resources>
+          XMLEOF
+
+          echo "=== Generated icons ==="
+          find android/app/src/main/res/mipmap-* -name "*.png" | head -10
+
+      - name: Configure fullscreen styles
+        run: |
+          STYLES_FILE="android/app/src/main/res/values/styles.xml"
+          echo "=== Original styles.xml ==="
+          cat "$STYLES_FILE"
+
+          # Перезаписываем styles.xml с fullscreen темой
+          cat > "$STYLES_FILE" << 'XMLEOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <style name="AppTheme" parent="Theme.AppCompat.DayNight.NoActionBar">
+                  <item name="android:background">@null</item>
+                  <item name="android:windowFullscreen">true</item>
+                  <item name="android:windowContentOverlay">@null</item>
+                  <item name="android:windowNoTitle">true</item>
+                  <item name="android:windowDrawsSystemBarBackgrounds">false</item>
+                  <item name="android:statusBarColor">@android:color/transparent</item>
+                  <item name="android:navigationBarColor">@android:color/black</item>
+              </style>
+
+              <style name="AppTheme.NoActionBar" parent="AppTheme">
+                  <item name="windowActionBar">false</item>
+                  <item name="windowNoTitle">true</item>
+                  <item name="android:windowFullscreen">true</item>
+                  <item name="android:windowDrawsSystemBarBackgrounds">false</item>
+              </style>
+
+              <style name="AppTheme.NoActionBarLaunch" parent="AppTheme.NoActionBar">
+                  <item name="android:background">@drawable/splash</item>
+                  <item name="android:windowFullscreen">true</item>
+              </style>
+          </resources>
+          XMLEOF
+          echo "=== Updated styles.xml ==="
+          cat "$STYLES_FILE"
+
+      - name: Configure MainActivity for immersive mode
+        run: |
+          # Находим MainActivity.java
+          MAIN_ACTIVITY=$(find android/app/src/main/java -name "MainActivity.java" | head -1)
+          echo "MainActivity at: $MAIN_ACTIVITY"
+          echo "=== Original ==="
+          cat "$MAIN_ACTIVITY"
+
+          # Извлекаем package из существующего файла
+          PACKAGE=$(grep "^package" "$MAIN_ACTIVITY" | head -1 | sed 's/package //;s/;//')
+          echo "Package: $PACKAGE"
+
+          # Перезаписываем MainActivity с immersive mode
+          cat > "$MAIN_ACTIVITY" << JAVAEOF
+          package $PACKAGE;
+
+          import android.os.Bundle;
+          import android.view.View;
+          import android.view.WindowManager;
+          import com.getcapacitor.BridgeActivity;
+
+          public class MainActivity extends BridgeActivity {
+              @Override
+              public void onCreate(Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
+                  hideSystemUI();
+              }
+
+              @Override
+              public void onWindowFocusChanged(boolean hasFocus) {
+                  super.onWindowFocusChanged(hasFocus);
+                  if (hasFocus) {
+                      hideSystemUI();
+                  }
+              }
+
+              private void hideSystemUI() {
+                  // Immersive sticky mode - скрываем status и navigation bar
+                  View decorView = getWindow().getDecorView();
+                  decorView.setSystemUiVisibility(
+                      View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                      | View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                      | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                      | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                      | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                      | View.SYSTEM_UI_FLAG_FULLSCREEN
+                  );
+                  // Также добавляем флаг чтобы экран не выключался во время игры
+                  getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+              }
+          }
+          JAVAEOF
+          echo "=== Updated MainActivity ==="
+          cat "$MAIN_ACTIVITY"
 
       - name: Configure AdMob in AndroidManifest
         run: |
