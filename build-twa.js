@@ -1,92 +1,168 @@
-/**
- * Генерирует Android TWA проект из twa-manifest.json через @bubblewrap/core API
- * Иконки конвертируются в data URL (base64) чтобы избежать проблем с HTTP fetch
- */
-const path = require('path');
-const fs = require('fs');
+name: Build Android APK
 
-function fileToDataUrl(filepath, mimeType = 'image/png') {
-  const buf = fs.readFileSync(filepath);
-  return `data:${mimeType};base64,${buf.toString('base64')}`;
-}
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'manifest.webmanifest'
+      - 'index.html'
+      - 'sw.js'
+      - 'icon-*.png'
+      - '.github/workflows/build-apk.yml'
+      - 'twa-manifest.json'
+      - 'build-twa.js'
+  workflow_dispatch:
 
-async function main() {
-  const manifestPath = path.resolve(__dirname, 'twa-manifest.json');
-  const projectDir = path.resolve(__dirname, 'android-project');
-  const repoRoot = __dirname;
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
 
-  console.log('=== TWA Build Script ===');
-  console.log('Manifest path:', manifestPath);
-  console.log('Project dir:', projectDir);
-  console.log('Repo root:', repoRoot);
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-  if (!fs.existsSync(manifestPath)) {
-    console.error('ERROR: twa-manifest.json не найден!');
-    process.exit(1);
-  }
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
 
-  const data = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
 
-  // === Конвертируем иконки в data URL ===
-  const localIcon = path.join(repoRoot, 'icon-512.png');
-  const localMaskable = path.join(repoRoot, 'icon-maskable.png');
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'platforms;android-34 build-tools;34.0.0 platform-tools'
 
-  console.log('\n=== Local icon files ===');
-  console.log('icon-512.png exists:', fs.existsSync(localIcon),
-              'size:', fs.existsSync(localIcon) ? fs.statSync(localIcon).size : 0, 'bytes');
-  console.log('icon-maskable.png exists:', fs.existsSync(localMaskable),
-              'size:', fs.existsSync(localMaskable) ? fs.statSync(localMaskable).size : 0, 'bytes');
+      - name: Wait for GitHub Pages deploy
+        run: |
+          echo "Waiting 60 seconds for GitHub Pages to deploy..."
+          sleep 60
 
-  if (!fs.existsSync(localIcon)) {
-    console.error('ERROR: icon-512.png отсутствует в репо!');
-    process.exit(1);
-  }
-  if (!fs.existsSync(localMaskable)) {
-    console.error('ERROR: icon-maskable.png отсутствует в репо!');
-    process.exit(1);
-  }
+      - name: Verify PWA URLs are accessible
+        run: |
+          set -e
+          echo "Checking PWA endpoints..."
+          for url in \
+            "https://tie-channel.github.io/evolrace/" \
+            "https://tie-channel.github.io/evolrace/manifest.webmanifest" \
+            "https://tie-channel.github.io/evolrace/icon-512.png" \
+            "https://tie-channel.github.io/evolrace/icon-maskable.png"; do
+            echo "Checking: $url"
+            curl -sSfL -o /dev/null -w "  HTTP %{http_code} - %{size_download} bytes\n" "$url" || \
+              echo "  WARNING: $url failed"
+          done
 
-  // Подменяем URL на data URL (содержит сам бинарный PNG в base64)
-  data.iconUrl = fileToDataUrl(localIcon);
-  data.maskableIconUrl = fileToDataUrl(localMaskable);
+      - name: Install @bubblewrap/core
+        run: |
+          npm init -y
+          npm install @bubblewrap/core@latest --save
 
-  console.log('\n=== Icons converted to data URLs ===');
-  console.log('iconUrl size:', data.iconUrl.length, 'chars');
-  console.log('maskableIconUrl size:', data.maskableIconUrl.length, 'chars');
-  console.log('iconUrl prefix:', data.iconUrl.substring(0, 50));
+      - name: Print bubblewrap version
+        run: |
+          node -e "const pkg = require('@bubblewrap/core/package.json'); console.log('@bubblewrap/core version:', pkg.version);"
 
-  console.log('\nLoading @bubblewrap/core...');
-  const core = require('@bubblewrap/core');
-  const { TwaGenerator, TwaManifest } = core;
-  console.log('@bubblewrap/core version:', require('@bubblewrap/core/package.json').version);
+      - name: Generate TWA Android Project
+        run: node build-twa.js
 
-  console.log('\nCreating TwaManifest from data...');
-  const twaManifest = new TwaManifest(data);
-  console.log('TwaManifest created OK');
+      - name: List Android project structure
+        run: |
+          echo "=== android-project structure ==="
+          find android-project -maxdepth 3 -type f 2>/dev/null | head -30 || echo "No project dir!"
+          echo ""
+          echo "=== Looking for gradlew ==="
+          find android-project -name "gradlew" -type f 2>/dev/null
 
-  if (!fs.existsSync(projectDir)) {
-    fs.mkdirSync(projectDir, { recursive: true });
-  }
+      - name: Generate signing keystore
+        run: |
+          keytool -genkeypair \
+            -dname "cn=Evolrace, ou=Apps, o=TieChannel, c=US" \
+            -alias evolrace \
+            -keypass android \
+            -keystore android-project/android.keystore \
+            -storepass android \
+            -validity 20000 \
+            -keyalg RSA \
+            -keysize 2048
 
-  console.log('\nGenerating TWA Android project...');
-  const generator = new TwaGenerator();
-  await generator.createTwaProject(projectDir, twaManifest);
+      - name: Print signing key SHA-256 fingerprint
+        run: |
+          echo "=== SHA-256 fingerprint for assetlinks.json ==="
+          keytool -list -v \
+            -keystore android-project/android.keystore \
+            -alias evolrace \
+            -storepass android \
+            -keypass android | grep -E "SHA256:" | head -1
 
-  // Сохраняем оригинальный twa-manifest.json в проект (с URL а не data URL)
-  fs.copyFileSync(manifestPath, path.join(projectDir, 'twa-manifest.json'));
+      - name: Build APK with Gradle
+        working-directory: android-project
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease bundleRelease \
+            -Pandroid.injected.signing.store.file=$(pwd)/android.keystore \
+            -Pandroid.injected.signing.store.password=android \
+            -Pandroid.injected.signing.key.alias=evolrace \
+            -Pandroid.injected.signing.key.password=android \
+            --stacktrace --no-daemon
 
-  console.log('\nSUCCESS: TWA Android project generated!');
-  console.log('Files in project root:');
-  fs.readdirSync(projectDir).forEach((f) => {
-    const fp = path.join(projectDir, f);
-    const stat = fs.statSync(fp);
-    console.log(`  ${stat.isDirectory() ? 'D' : 'F'} ${f}`);
-  });
-}
+      - name: List generated artifacts
+        run: |
+          echo "=== Generated APKs ==="
+          find android-project -name "*.apk" -type f
+          echo ""
+          echo "=== Generated AABs ==="
+          find android-project -name "*.aab" -type f
 
-main().catch((err) => {
-  console.error('\n=== FATAL ERROR ===');
-  console.error(err);
-  if (err.stack) console.error(err.stack);
-  process.exit(1);
-});
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: evolrace-apk
+          path: android-project/app/build/outputs/apk/release/*.apk
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Upload AAB
+        uses: actions/upload-artifact@v4
+        with:
+          name: evolrace-aab
+          path: android-project/app/build/outputs/bundle/release/*.aab
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Generate assetlinks.json
+        if: always()
+        run: |
+          FINGERPRINT=$(keytool -list -v \
+            -keystore android-project/android.keystore \
+            -alias evolrace \
+            -storepass android \
+            -keypass android 2>/dev/null | grep -E "SHA256:" | head -1 | awk '{print $2}' || echo "")
+
+          if [ -n "$FINGERPRINT" ]; then
+            cat > assetlinks.json << ASSETLINK
+          [{
+            "relation": ["delegate_permission/common.handle_all_urls"],
+            "target": {
+              "namespace": "android_app",
+              "package_name": "io.github.tiechannel.evolrace",
+              "sha256_cert_fingerprints": ["$FINGERPRINT"]
+            }
+          }]
+          ASSETLINK
+            echo "assetlinks.json created with fingerprint: $FINGERPRINT"
+            cat assetlinks.json
+          else
+            echo "Warning: no fingerprint extracted"
+          fi
+
+      - name: Upload assetlinks.json
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: assetlinks-json
+          path: assetlinks.json
+          if-no-files-found: warn
