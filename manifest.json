@@ -2,7 +2,7 @@
   "name": "Evolrace",
   "short_name": "Evolrace",
   "description": "Pixel-art rhythm runner with evolving hero, 10 epic bosses and procedural music",
-  "start_url": "./",
+  "start_url": "./evolrace/",
   "scope": "./",
   "display": "fullscreen",
   "orientation": "landscape",
@@ -11,19 +11,19 @@
   "categories": ["games", "entertainment"],
   "icons": [
     {
-      "src": "icon-192.png",
+      "src": "evolrace/icon-192.png",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "icon-512.png",
+      "src": "evolrace/icon-512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "icon-512.png",
+      "src": "evolrace/icon-512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "maskable"
