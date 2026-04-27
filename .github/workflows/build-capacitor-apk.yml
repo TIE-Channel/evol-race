@@ -100,6 +100,26 @@ jobs:
           echo "=== Capacitor plugins (from capacitor.plugins.json) ==="
           cat android/app/src/main/assets/capacitor.plugins.json 2>/dev/null || echo "(no capacitor.plugins.json)"
 
+      - name: Bump minSdkVersion to 24 (required by Google Play Billing 8.x)
+        run: |
+          # cordova-plugin-purchase v13 использует com.android.billingclient:billing:8.3.0
+          # который требует minSdkVersion >= 23. Capacitor ставит по умолчанию 22.
+          # Поднимаем до 24 - современный baseline для Play Store (covers ~99% устройств).
+          VARS_FILE="android/variables.gradle"
+          if [ ! -f "$VARS_FILE" ]; then
+            echo "ERROR: $VARS_FILE not found"
+            exit 1
+          fi
+          echo "=== Original variables.gradle ==="
+          cat "$VARS_FILE"
+
+          # Заменяем minSdkVersion на 24
+          sed -i 's/minSdkVersion = [0-9]*/minSdkVersion = 24/' "$VARS_FILE"
+
+          echo ""
+          echo "=== Updated variables.gradle ==="
+          cat "$VARS_FILE"
+
       - name: Generate Android app icons
         run: |
           # Создаём папки mipmap для разных плотностей экрана
