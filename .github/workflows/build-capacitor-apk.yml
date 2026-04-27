@@ -53,6 +53,14 @@ jobs:
           ls -la node_modules/.bin/cap || echo "WARNING: cap not in .bin"
           ls -la node_modules/@capacitor/cli/bin/capacitor || echo "WARNING: capacitor binary not found"
           echo ""
+          echo "=== Verifying cordova-plugin-purchase (IAP) ==="
+          if [ -d "node_modules/cordova-plugin-purchase" ]; then
+            echo "OK - cordova-plugin-purchase installed:"
+            cat node_modules/cordova-plugin-purchase/package.json | grep -E '"version"|"name"' | head -2
+          else
+            echo "WARNING: cordova-plugin-purchase NOT installed (IAP will not work)"
+          fi
+          echo ""
           echo "=== Installed packages ==="
           npm list --depth=0 || true
 
@@ -78,7 +86,19 @@ jobs:
           fi
 
       - name: Sync Capacitor
-        run: npx cap sync android
+        run: |
+          npx cap sync android
+          echo ""
+          echo "=== Cordova plugins synced ==="
+          if [ -d "android/capacitor-cordova-android-plugins" ]; then
+            ls android/capacitor-cordova-android-plugins/src/main/java 2>/dev/null || echo "(no java folder)"
+            echo ""
+            echo "=== build.gradle of cordova plugins (dependencies) ==="
+            cat android/capacitor-cordova-android-plugins/build.gradle 2>/dev/null | head -50 || echo "(no build.gradle)"
+          fi
+          echo ""
+          echo "=== Capacitor plugins (from capacitor.plugins.json) ==="
+          cat android/app/src/main/assets/capacitor.plugins.json 2>/dev/null || echo "(no capacitor.plugins.json)"
 
       - name: Generate Android app icons
         run: |
@@ -313,6 +333,21 @@ jobs:
                   count=1
               )
               print("Added new configChanges")
+
+          # 4. BILLING permission для Google Play Billing (cordova-plugin-purchase)
+          # Если cordova-plugin-purchase уже добавил - пропускаем
+          if 'com.android.vending.BILLING' not in content:
+              # Добавляем permission перед <application>
+              billing_perm = '<uses-permission android:name="com.android.vending.BILLING" />'
+              content = re.sub(
+                  r'(\s*<application)',
+                  r'\n    ' + billing_perm + r'\1',
+                  content,
+                  count=1
+              )
+              print("Added BILLING permission")
+          else:
+              print("BILLING permission already present (added by cordova-plugin-purchase)")
 
           with open("$ANDROID_MANIFEST", "w") as f:
               f.write(content)
