@@ -9577,11 +9577,14 @@ document.addEventListener('click', lockOrientation, { once: true });
 
   async function showBannerAd() {
     if (!isCapacitor || adsRemoved) return;
+    if (bannerShown) return; // уже показан или в процессе показа
     if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
     if (adsAreCoolingDown()) return;
+    // СРАЗУ ставим флаг до await чтобы predотвратить race condition при polling 200ms
+    // (без этого checkGameState вызовет showBannerAd 25 раз за 5 сек pending)
+    bannerShown = true;
     try {
       const { AdMob } = window.Capacitor.Plugins;
-      // Timeout 5 сек - в заблокированных регионах showBanner может висеть
       await withTimeout(
         AdMob.showBanner({
           adId: AD_IDS.banner,
@@ -9593,21 +9596,20 @@ document.addEventListener('click', lockOrientation, { once: true });
         5000,
         'showBanner'
       );
-      bannerShown = true;
       recordAdSuccess();
       console.log('[Ads] Banner shown');
-      // Рамка с надписью "Ads" уже видна (управляется отдельно в checkGameState)
-      // Banner накладывается поверх рамки и перекрывает текст
     } catch (e) {
       console.warn('[Ads] showBanner error:', e.message || e);
-      bannerShown = false;
+      bannerShown = false; // сбрасываем при ошибке
       recordAdFailure();
     }
   }
 
   async function hideBannerAd() {
     if (!isCapacitor) return;
-    // Рамка остаётся видимой (управляется в checkGameState через adsRemoved)
+    if (!bannerShown) return; // уже скрыт или в процессе скрытия
+    // СРАЗУ ставим флаг чтобы предотвратить повторные hideBannerAd при 200ms polling
+    bannerShown = false;
     try {
       const { AdMob } = window.Capacitor.Plugins;
       await AdMob.removeBanner();
@@ -9618,7 +9620,6 @@ document.addEventListener('click', lockOrientation, { once: true });
         await window.Capacitor.Plugins.AdMob.hideBanner();
       } catch (e2) {}
     }
-    bannerShown = false;
   }
 
   async function showInterstitialAd() {
