@@ -711,71 +711,19 @@ document.addEventListener('click', lockOrientation, { once: true });
 
     const scale = prog.scale;
     LEAD_RIFF = [];
-    // Ритмы: 4-6 нот на такт, разные паттерны
     const RHYTHMS = [
       [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0],
       [1, 0, 1, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0],
       [0, 0, 1, 0, 0, 0, 1, 0, 1, 0, 0, 0, 1, 0, 1, 0],
-      [1, 0, 0, 0, 1, 0, 1, 0, 0, 0, 1, 0, 1, 0, 0, 0],
-      [1, 0, 0, 1, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0],
-      [1, 0, 1, 0, 0, 0, 1, 0, 1, 0, 1, 0, 0, 0, 1, 0]
+      [1, 0, 0, 0, 1, 0, 1, 0, 0, 0, 1, 0, 1, 0, 0, 0]
     ];
-
-    // === МЕЛОДИЧНОЕ ДВИЖЕНИЕ - выбираем "контур" мелодии ===
-    // Каждый такт имеет начальную ноту (anchor) и направление движения
-    // Это даёт мелодичную линию вместо случайных скачков
-
-    // Берём 2 разных ритма: один для тактов 1,3 (call), другой для тактов 2,4 (response)
-    let rhythmA = RHYTHMS[Math.floor(srand() * RHYTHMS.length)];
-    let rhythmB = RHYTHMS[Math.floor(srand() * RHYTHMS.length)];
-    // Гарантируем что ритмы разные
-    if (rhythmA === rhythmB) {
-      rhythmB = RHYTHMS[(RHYTHMS.indexOf(rhythmA) + 1) % RHYTHMS.length];
-    }
-
-    // Якорь-индексы в шкале (стартовые ноты для каждого такта) - связаны с CHORD_ROOTS
-    // Берём индекс ноты в шкале ближайший к chord root
-    function findAnchorIdx(rootNote) {
-      // Ищем индекс в scale, который равен rootNote или соседний
-      let bestIdx = 0;
-      for (let i = 0; i < scale.length; i++) {
-        if (scale[i] === rootNote) return i;
-      }
-      // Если точного нет - возьмём середину шкалы
-      return Math.floor(scale.length / 2);
-    }
-
     for (let bar = 0; bar < 4; bar++) {
-      const rhythm = (bar % 2 === 0) ? rhythmA : rhythmB;
+      const rhythm = RHYTHMS[Math.floor(srand() * RHYTHMS.length)];
       const lineRiff = [];
-
-      // Стартовая позиция в шкале для этого такта
-      let scaleIdx = findAnchorIdx(CHORD_ROOTS[bar]);
-      // Контур такта: -1 (нисходящий), 0 (стационарный с вариациями), +1 (восходящий)
-      const contour = (Math.floor(srand() * 3)) - 1;
-
-      let prevIdx = scaleIdx;
       for (let i = 0; i < 16; i++) {
         if (rhythm[i]) {
-          // Движение по шкале: чаще +1/-1 ступень, реже скачок 2-3 ступени
-          const r = srand();
-          let step;
-          if (r < 0.55) {
-            step = contour; // движение по контуру (-1, 0, +1)
-            // Иногда зеркалим если двинулись слишком далеко
-            if (Math.abs(scaleIdx - prevIdx) > 3) step = -contour;
-          } else if (r < 0.85) {
-            step = (srand() < 0.5) ? -1 : 1; // сосед
-          } else {
-            step = (srand() < 0.5) ? -2 : 2; // скачок
-          }
-          scaleIdx = Math.max(0, Math.min(scale.length - 1, scaleIdx + step));
-          // Первая нота такта - на якоре (тоника аккорда)
-          if (i === rhythm.indexOf(1)) {
-            scaleIdx = findAnchorIdx(CHORD_ROOTS[bar]);
-          }
-          lineRiff.push(scale[scaleIdx]);
-          prevIdx = scaleIdx;
+          let note = scale[Math.floor(srand() * scale.length)];
+          lineRiff.push(note);
         } else {
           lineRiff.push(0);
         }
@@ -1030,10 +978,7 @@ document.addEventListener('click', lockOrientation, { once: true });
   // Птеродактиль - splash cymbal (короткий высокий звон, отличается от crash)
   function playBirdCall(t) {
     if (!audioCtx) return;
-    // Звук "глухой второй тарелки" (как ride cymbal или choked splash)
-    // Более тёмный/глухой чем crash - средние частоты вместо ярких высоких
-
-    // Шумовой буфер
+    // Короткий шумовой буфер
     const noiseSize = audioCtx.sampleRate * 0.4;
     const noiseBuf = audioCtx.createBuffer(1, noiseSize, audioCtx.sampleRate);
     const noiseData = noiseBuf.getChannelData(0);
@@ -1041,39 +986,33 @@ document.addEventListener('click', lockOrientation, { once: true });
     const noise = audioCtx.createBufferSource();
     noise.buffer = noiseBuf;
 
-    // Bandpass на средних частотах (4500 Hz вместо 7500) - более тёмный тон
+    // Bandpass на средне-высоких частотах с резонансом - как tight splash
     const bp = audioCtx.createBiquadFilter();
     bp.type = 'bandpass';
-    bp.frequency.value = 4500;
-    bp.Q.value = 2;
+    bp.frequency.value = 7500;
+    bp.Q.value = 3;
 
-    // Дополнительный lowpass для "глухости" - срезает яркие высокие
-    const lp = audioCtx.createBiquadFilter();
-    lp.type = 'lowpass';
-    lp.frequency.value = 6000;
-    lp.Q.value = 0.7;
-
-    // Огибающая - короче чем у crash (ride cymbal играет коротко)
+    // Короткая огибающая - быстрая атака, более быстрый распад чем у crash
     const g = audioCtx.createGain();
     g.gain.setValueAtTime(0, t);
-    g.gain.linearRampToValueAtTime(0.20, t + 0.005);
-    g.gain.exponentialRampToValueAtTime(0.001, t + 0.30);
+    g.gain.linearRampToValueAtTime(0.22, t + 0.003);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.35);
 
-    noise.connect(bp).connect(lp).connect(g).connect(masterOut);
+    noise.connect(bp).connect(g).connect(masterOut);
     noise.start(t);
 
-    // Тональный акцент - ниже sine (1800 → 1200 Hz, вместо 3200 → 2400)
+    // Высокий "звонкий" sine для тонального акцента (отличает от обычной crash)
     const o = audioCtx.createOscillator();
     o.type = 'sine';
-    o.frequency.setValueAtTime(1800, t);
-    o.frequency.exponentialRampToValueAtTime(1200, t + 0.2);
+    o.frequency.setValueAtTime(3200, t);
+    o.frequency.exponentialRampToValueAtTime(2400, t + 0.2);
     const og = audioCtx.createGain();
     og.gain.setValueAtTime(0, t);
-    og.gain.linearRampToValueAtTime(0.06, t + 0.005);
-    og.gain.exponentialRampToValueAtTime(0.001, t + 0.25);
+    og.gain.linearRampToValueAtTime(0.08, t + 0.005);
+    og.gain.exponentialRampToValueAtTime(0.001, t + 0.3);
     o.connect(og).connect(masterOut);
     o.start(t);
-    o.stop(t + 0.3);
+    o.stop(t + 0.35);
   }
 
   function playClap(t) {
@@ -1100,7 +1039,7 @@ document.addEventListener('click', lockOrientation, { once: true });
     o.frequency.value = freq;
     const g = audioCtx.createGain();
     g.gain.setValueAtTime(0.001, t);
-    g.gain.linearRampToValueAtTime(0.11, t + 0.01);
+    g.gain.linearRampToValueAtTime(0.12, t + 0.01);
     g.gain.exponentialRampToValueAtTime(0.001, t + dur);
     o.connect(g);
     g.connect(distBus);
@@ -9399,7 +9338,7 @@ document.addEventListener('click', lockOrientation, { once: true });
 <div id="ad-banner-frame" style="display:none;position:fixed;bottom:6px;left:50%;transform:translateX(-50%);
   width:320px;height:50px;
   border:2px solid #1060a0;
-  background:#1060a0;
+  background:#000000;
   border-radius:3px;
   box-shadow:0 2px 6px rgba(0,0,0,0.5);
   z-index:999;pointer-events:none;
