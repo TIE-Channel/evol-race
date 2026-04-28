@@ -120,6 +120,27 @@ jobs:
           echo "=== Updated variables.gradle ==="
           cat "$VARS_FILE"
 
+      - name: Set versionCode for Play Store deployment
+        run: |
+          # Play Store требует уникальный versionCode для каждого нового AAB.
+          # Используем GitHub Actions run number - всегда увеличивается.
+          # versionName можно оставить семантический (1.0.0).
+          # Базовый offset 10 чтобы избежать конфликтов с существующими versionCodes.
+          BUILD_GRADLE="android/app/build.gradle"
+          VERSION_CODE=$((10 + ${{ github.run_number }}))
+          echo "Setting versionCode to: $VERSION_CODE"
+
+          # Заменяем versionCode в android/app/build.gradle
+          sed -i "s/versionCode [0-9]*/versionCode $VERSION_CODE/" "$BUILD_GRADLE"
+
+          # Также обновляем versionName с номером сборки для удобства отладки
+          # (формат: 1.0.X где X = run number)
+          VERSION_NAME="1.0.${{ github.run_number }}"
+          sed -i "s/versionName \"[^\"]*\"/versionName \"$VERSION_NAME\"/" "$BUILD_GRADLE"
+
+          echo "=== Updated versionCode and versionName ==="
+          grep -E "versionCode|versionName" "$BUILD_GRADLE"
+
       - name: Generate Android app icons
         run: |
           # Создаём папки mipmap для разных плотностей экрана
@@ -464,6 +485,34 @@ jobs:
           path: android/app/build/outputs/bundle/release/*.aab
           if-no-files-found: warn
           retention-days: 30
+
+      # === DEPLOY TO GOOGLE PLAY (Internal Testing) ===
+      # Запускается только если установлен secret PLAY_STORE_SERVICE_ACCOUNT_JSON.
+      # Если secret не задан - step пропускается, билд всё равно успешный.
+      # Подробная инструкция по настройке secret-а в PLAY_STORE_DEPLOY.md
+      - name: Check Play Store deploy availability
+        id: check_deploy
+        run: |
+          if [ -n "${{ secrets.PLAY_STORE_SERVICE_ACCOUNT_JSON }}" ]; then
+            echo "available=true" >> $GITHUB_OUTPUT
+            echo "Play Store service account is configured - will deploy"
+          else
+            echo "available=false" >> $GITHUB_OUTPUT
+            echo "Play Store service account NOT configured - skipping deploy"
+            echo "Add PLAY_STORE_SERVICE_ACCOUNT_JSON secret in repo Settings to enable"
+          fi
+
+      - name: Deploy to Google Play (Internal Testing)
+        if: steps.check_deploy.outputs.available == 'true'
+        uses: r0adkll/upload-google-play@v1
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.PLAY_STORE_SERVICE_ACCOUNT_JSON }}
+          packageName: io.github.tiechannel.evolrace
+          releaseFiles: android/app/build/outputs/bundle/release/*.aab
+          track: internal
+          status: completed
+          inAppUpdatePriority: 0
+          # whatsNewDirectory: distribution/whatsnew  # опционально для release notes
 
       - name: Upload build logs
         if: failure()
