@@ -87,17 +87,33 @@ async function tapCanvas(page) {
 }
 
 // Применяет cheat-код напрямую через _evolrace.applyCheat
+// + Диагностика - возвращает state до и после, чтобы видеть что происходит
 async function applyCheatLevel(page, levelNum) {
   const result = await page.evaluate((n) => {
-    if (window._evolrace && window._evolrace.applyCheat) {
-      return window._evolrace.applyCheat(n);
+    if (!window._evolrace) {
+      return { ok: false, error: 'window._evolrace not exposed' };
     }
-    return false;
+    if (!window._evolrace.applyCheat) {
+      return { ok: false, error: 'applyCheat function missing - update index.html', stateBefore: window._evolrace.getState() };
+    }
+    const stateBefore = window._evolrace.getState();
+    const ok = window._evolrace.applyCheat(n);
+    const stateAfter = window._evolrace.getState();
+    return { ok: ok, stateBefore, stateAfter };
   }, levelNum);
-  if (!result) {
-    throw new Error(`applyCheat(${levelNum}) failed - _evolrace.applyCheat not available`);
+
+  console.log(`    applyCheat(${levelNum}) result:`, JSON.stringify(result));
+
+  if (!result.ok) {
+    throw new Error(`applyCheat(${levelNum}) failed: ${result.error || 'returned false'}`);
   }
-  await sleep(300);
+  await sleep(500);
+
+  // Проверяем что state стал RUN (2)
+  const finalState = await page.evaluate(() => window._evolrace.getState());
+  console.log(`    finalState after sleep: ${finalState} (expected 2 for RUN)`);
+
+  return finalState;
 }
 
 // Сценарии скриншотов
@@ -124,9 +140,10 @@ const SCENARIOS = [
         { timeout: 15000 }
       );
       await applyCheatLevel(page, 1);
+      // Ждём пока state перейдёт в RUN (через INTRO) - до 20 сек
       await page.waitForFunction(
         () => window._evolrace && window._evolrace.getState() === 2,
-        { timeout: 10000 }
+        { timeout: 20000 }
       );
       await sleep(7000);
     }
@@ -144,7 +161,7 @@ const SCENARIOS = [
       await applyCheatLevel(page, 2);
       await page.waitForFunction(
         () => window._evolrace && window._evolrace.getState() === 2,
-        { timeout: 10000 }
+        { timeout: 20000 }
       );
       await sleep(2500);
     }
@@ -162,7 +179,7 @@ const SCENARIOS = [
       await applyCheatLevel(page, 3);
       await page.waitForFunction(
         () => window._evolrace && window._evolrace.getState() === 2,
-        { timeout: 10000 }
+        { timeout: 20000 }
       );
       await sleep(7000);
     }
@@ -280,7 +297,7 @@ async function recordVideo(device) {
   await applyCheatLevel(page, 5);
   await page.waitForFunction(
     () => window._evolrace && window._evolrace.getState() === 2,
-    { timeout: 10000 }
+    { timeout: 20000 }
   );
 
   console.log('  Recording 30 seconds of gameplay...');
