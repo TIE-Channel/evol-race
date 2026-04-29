@@ -117,6 +117,34 @@ async function applyCheatLevel(page, levelNum) {
   return finalState;
 }
 
+// Ждёт N миллисекунд игрового времени через _evolrace.tickFrames
+// (надёжно работает даже когда RAF throttled в headless Chrome)
+// 7 секунд = 7 * 60 = 420 кадров (60 fps target)
+async function waitGameFrames(page, durationMs) {
+  const targetFrames = Math.round(durationMs * 60 / 1000); // 60 fps
+
+  // Принудительно тикаем кадры через экспортированную функцию игры
+  const result = await page.evaluate((nFrames) => {
+    if (window._evolrace && window._evolrace.tickFrames) {
+      const fcBefore = window._evolrace.getFrameCount();
+      const ticked = window._evolrace.tickFrames(nFrames);
+      const fcAfter = window._evolrace.getFrameCount();
+      return { ok: true, ticked, fcBefore, fcAfter };
+    }
+    return { ok: false, error: 'tickFrames not available' };
+  }, targetFrames);
+
+  console.log(`    waitGameFrames(${durationMs}ms = ${targetFrames} frames):`, JSON.stringify(result));
+
+  if (!result.ok) {
+    // Fallback - просто sleep если функция недоступна
+    await sleep(durationMs);
+  } else {
+    // Даём 100мс на render() финального состояния
+    await sleep(100);
+  }
+}
+
 // Сценарии скриншотов
 const SCENARIOS = [
   {
@@ -141,17 +169,16 @@ const SCENARIOS = [
         { timeout: 15000 }
       );
       await applyCheatLevel(page, 1);
-      // Ждём пока state перейдёт в RUN (через INTRO) - до 20 сек
       await page.waitForFunction(
         () => window._evolrace && window._evolrace.getState() === 2,
         { timeout: 20000 }
       );
-      await sleep(7000);
+      await waitGameFrames(page, 7000);
     }
   },
   {
     name: '03-itted02',
-    description: 'Level 2 (itted02)',
+    description: 'Level 2 (itted02 + 7 sec)',
     setup: async (page) => {
       await page.reload();
       await sleep(5500);
@@ -164,7 +191,7 @@ const SCENARIOS = [
         () => window._evolrace && window._evolrace.getState() === 2,
         { timeout: 20000 }
       );
-      await sleep(2500);
+      await waitGameFrames(page, 7000);
     }
   },
   {
@@ -182,23 +209,34 @@ const SCENARIOS = [
         () => window._evolrace && window._evolrace.getState() === 2,
         { timeout: 20000 }
       );
-      await sleep(7000);
+      await waitGameFrames(page, 7000);
     }
   },
   {
     name: '05-game-over',
     description: 'Game over screen with score',
     setup: async (page) => {
-      // Ждём пока герой умрёт от препятствий после itted03
-      let attempts = 0;
-      while (attempts < 60) {
-        const state = await page.evaluate(() =>
-          (window._evolrace && window._evolrace.getState) ? window._evolrace.getState() : -1
-        );
-        if (state === 3) break;
-        await sleep(1000);
-        attempts++;
-      }
+      // Reload + applyCheat(2) + forceGameOver - моментальный game over
+      // (раньше ждали до 60 сек смерти от препятствий - слишком долго для CI)
+      await page.reload();
+      await sleep(5500);
+      await page.waitForFunction(
+        () => window._evolrace && window._evolrace.getState() === 0,
+        { timeout: 15000 }
+      );
+      await applyCheatLevel(page, 2);
+      await page.waitForFunction(
+        () => window._evolrace && window._evolrace.getState() === 2,
+        { timeout: 20000 }
+      );
+      // Даём 1.5 сек побегать чтобы score набрался
+      await sleep(1500);
+      // Принудительно в OVER через forceGameOver
+      await page.evaluate(() => {
+        if (window._evolrace && window._evolrace.forceGameOver) {
+          window._evolrace.forceGameOver();
+        }
+      });
       await sleep(1500);
     }
   }
