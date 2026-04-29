@@ -9021,18 +9021,6 @@ document.addEventListener('click', lockOrientation, { once: true });
     for (const u of unicorns) drawUnicorn(u);
     for (const h of hearts) drawHeartBonus(h);
 
-    // === FRAME INTERPOLATION ===
-    // На high-refresh дисплеях (120/144Hz) между двумя update'ами рисуем
-    // промежуточные кадры со сдвигом мира на доли скорости.
-    // _interpolationOffset = 0..(-speed) - сдвиг мира в текущем суб-кадре.
-    // Это даёт плавный motion на 120Hz без изменения game logic.
-    // На 60Hz interpolation всегда 0 (рендер сразу после update) - визуально не меняется.
-    const interpOff = window._interpolationOffset || 0;
-    if (interpOff !== 0 && state === STATE.RUN) {
-      ctx.save();
-      ctx.translate(interpOff, 0);
-    }
-
     drawGround();
     drawUnderworld();
     for (const cr of crowds) drawCrowd(cr);
@@ -9055,11 +9043,6 @@ document.addEventListener('click', lockOrientation, { once: true });
     for (const b of bolts) drawBolt(b);
     // Погода - дождь, снег, листья - поверх мира но под HUD
     drawWeather();
-
-    // Конец интерполяционного блока - возвращаем transform для HUD
-    if (interpOff !== 0 && state === STATE.RUN) {
-      ctx.restore();
-    }
 
     drawScore();
     if (state === STATE.INTRO) drawIntro();
@@ -9277,94 +9260,66 @@ document.addEventListener('click', lockOrientation, { once: true });
     // outroTimer стопится на 0 - финальный экран показывается до нажатия
   }
 
-  // FPS limiter с FRAME INTERPOLATION для плавности на 120/144Hz дисплеях
-  // Логика игры (update) выполняется фиксировано на 60 FPS (16.67ms/кадр)
-  // Рендеринг вызывается на каждом RAF tick - на высокочастотных дисплеях
-  // между двумя update'ами рисуется ПРОМЕЖУТОЧНЫЙ кадр со сдвигом world через ctx.translate
-  //
-  // Принцип: мир движется горизонтально на speed*N px между логическими кадрами.
-  // Render между ними - сдвигаем мир на speed*interpolation, где interpolation 0..1
-  const TARGET_FRAME_TIME = 1000 / 60; // 16.67ms на кадр для 60fps логики
-  let lastUpdateTimestamp = 0;
-  // _interpolationOffset = доля сдвига мира от 0 до speed между update тиками
-  // Используется в render() для горизонтального смещения world layer
-  let _interpolationOffset = 0;
-  // Делаем доступным для render через window
-  window._interpolationOffset = 0;
+  // FPS limiter - на дисплеях >60Hz (90/120/144Hz) пропускаем кадры чтобы игра не ускорялась
+  const TARGET_FRAME_TIME = 1000 / 60; // 16.67ms на кадр для 60fps
+  let lastFrameTimestamp = 0;
 
   function loop(timestamp) {
     if (timestamp === undefined) timestamp = 0;
 
+    // Пока splash виден - НЕ запускаем render/update
     if (window._splashVisible) {
       requestAnimationFrame(loop);
       return;
     }
 
+    // Если игра свёрнута - блокируем update и render
     if (gamePaused) {
-      lastUpdateTimestamp = timestamp;
       requestAnimationFrame(loop);
       return;
     }
 
-    if (lastUpdateTimestamp === 0) {
-      lastUpdateTimestamp = timestamp;
+    // Ограничиваем частоту кадров до 60fps
+    const elapsed = timestamp - lastFrameTimestamp;
+    if (elapsed < TARGET_FRAME_TIME - 1) {
+      requestAnimationFrame(loop);
+      return;
     }
+    lastFrameTimestamp = timestamp;
 
-    const elapsedSinceUpdate = timestamp - lastUpdateTimestamp;
-
-    // Когда набрался полный 16.67ms кадр - выполняем update
-    if (elapsedSinceUpdate >= TARGET_FRAME_TIME - 1) {
-      // Защита от больших пауз - max 4 кадра catch-up
-      const framesToCatchUp = Math.min(4, Math.floor(elapsedSinceUpdate / TARGET_FRAME_TIME));
-      for (let i = 0; i < framesToCatchUp; i++) {
-        if (state === STATE.INTRO) {
-          updateIntro();
-        } else if (state === STATE.OUTRO) {
-          updateOutro();
-        } else if (state === STATE.READY) {
-          frameCount++;
-          if (audioCtx) {
-            if (readyNextScheduleAt === 0) startReadyMusic();
-            else tickReadyMusic();
-          }
-          if (frameCount % 3 === 0) {
-            introBubbles.push({
-              x: Math.random() * W,
-              y: H - Math.random() * 100,
-              vy: -0.5 - Math.random() * 1,
-              sz: 1 + Math.random() * 3,
-              life: 100 + Math.random() * 60
-            });
-          }
-          for (const bb of introBubbles) {
-            bb.y += bb.vy;
-            bb.x += Math.sin(frameCount * 0.1 + bb.sz) * 0.3;
-            bb.life--;
-          }
-          for (let i = introBubbles.length - 1; i >= 0; i--) {
-            if (introBubbles[i].life <= 0 || introBubbles[i].y < -10) introBubbles.splice(i, 1);
-          }
-        } else {
-          update();
-        }
+    if (state === STATE.INTRO) {
+      updateIntro();
+    } else if (state === STATE.OUTRO) {
+      updateOutro();
+    } else if (state === STATE.READY) {
+      // Анимация READY-экрана: рыба плавает, пузыри
+      frameCount++;
+      // Запуск/тик мутирующей funk музыки на READY экране
+      if (audioCtx) {
+        if (readyNextScheduleAt === 0) startReadyMusic();
+        else tickReadyMusic();
       }
-      lastUpdateTimestamp += framesToCatchUp * TARGET_FRAME_TIME;
-    }
-
-    // Интерполяция - доля time elapsed между update тиками (0..1)
-    // На 60Hz interpolation всегда близко к 0 (rendered сразу после update)
-    // На 120Hz: render N - interpolation 0, render N+1 - interpolation 0.5
-    const interpAge = timestamp - lastUpdateTimestamp;
-    const interpFactor = Math.max(0, Math.min(1, interpAge / TARGET_FRAME_TIME));
-    // Sub-pixel offset для горизонтального скроллинга (-speed * interpFactor)
-    // Только в RUN (где есть scroll). interpFactor=0.5 = середина кадра, мир сдвигается на 0.5*speed дополнительно
-    if (state === STATE.RUN) {
-      _interpolationOffset = -speed * interpFactor;
+      // Спавним пузыри так же как в intro
+      if (frameCount % 3 === 0) {
+        introBubbles.push({
+          x: Math.random() * W,
+          y: H - Math.random() * 100,
+          vy: -0.5 - Math.random() * 1,
+          sz: 1 + Math.random() * 3,
+          life: 100 + Math.random() * 60
+        });
+      }
+      for (const bb of introBubbles) {
+        bb.y += bb.vy;
+        bb.x += Math.sin(frameCount * 0.1 + bb.sz) * 0.3;
+        bb.life--;
+      }
+      for (let i = introBubbles.length - 1; i >= 0; i--) {
+        if (introBubbles[i].life <= 0 || introBubbles[i].y < -10) introBubbles.splice(i, 1);
+      }
     } else {
-      _interpolationOffset = 0;
+      update();
     }
-    window._interpolationOffset = _interpolationOffset;
-
     render();
     requestAnimationFrame(loop);
   }

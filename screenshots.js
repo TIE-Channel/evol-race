@@ -118,31 +118,47 @@ async function applyCheatLevel(page, levelNum) {
 }
 
 // Ждёт N миллисекунд игрового времени через _evolrace.tickFrames
-// (надёжно работает даже когда RAF throttled в headless Chrome)
-// 7 секунд = 7 * 60 = 420 кадров (60 fps target)
+// Батчами по 30 кадров с короткими паузами чтобы не блокировать event loop
+// и не выжирать RAM (важно в headless CI)
 async function waitGameFrames(page, durationMs) {
   const targetFrames = Math.round(durationMs * 60 / 1000); // 60 fps
+  const BATCH_SIZE = 30; // ~0.5 сек игрового времени за батч
+  const batches = Math.ceil(targetFrames / BATCH_SIZE);
+  let totalTicked = 0;
 
-  // Принудительно тикаем кадры через экспортированную функцию игры
-  const result = await page.evaluate((nFrames) => {
-    if (window._evolrace && window._evolrace.tickFrames) {
-      const fcBefore = window._evolrace.getFrameCount();
-      const ticked = window._evolrace.tickFrames(nFrames);
-      const fcAfter = window._evolrace.getFrameCount();
-      return { ok: true, ticked, fcBefore, fcAfter };
+  for (let i = 0; i < batches; i++) {
+    const remaining = targetFrames - totalTicked;
+    const batchSize = Math.min(BATCH_SIZE, remaining);
+
+    try {
+      const result = await page.evaluate((n) => {
+        if (window._evolrace && window._evolrace.tickFrames) {
+          return window._evolrace.tickFrames(n);
+        }
+        return -1;
+      }, batchSize);
+
+      if (result === -1) {
+        console.log(`    waitGameFrames: tickFrames not available, fallback to sleep`);
+        await sleep(durationMs - i * (BATCH_SIZE * 1000 / 60));
+        return;
+      }
+
+      totalTicked += result;
+    } catch (e) {
+      console.log(`    waitGameFrames batch ${i} failed: ${e.message}`);
+      break;
     }
-    return { ok: false, error: 'tickFrames not available' };
-  }, targetFrames);
 
-  console.log(`    waitGameFrames(${durationMs}ms = ${targetFrames} frames):`, JSON.stringify(result));
-
-  if (!result.ok) {
-    // Fallback - просто sleep если функция недоступна
-    await sleep(durationMs);
-  } else {
-    // Даём 100мс на render() финального состояния
-    await sleep(100);
+    // Микропауза между батчами - даёт event loop перевести дух,
+    // позволяет render() отрисовать кадр в реальный canvas
+    await sleep(20);
   }
+
+  console.log(`    waitGameFrames(${durationMs}ms = ${targetFrames} frames): ticked=${totalTicked}`);
+
+  // Финальный sleep чтобы render успел показать последний кадр
+  await sleep(100);
 }
 
 // Сценарии скриншотов
