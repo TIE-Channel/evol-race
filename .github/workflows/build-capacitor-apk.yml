@@ -405,25 +405,46 @@ jobs:
           echo "=== Updated AndroidManifest.xml ==="
           cat "$ANDROID_MANIFEST"
 
-      - name: Generate signing keystore
+      - name: Setup signing keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
         run: |
-          keytool -genkeypair \
-            -dname "cn=Evolrace, ou=Apps, o=TieChannel, c=US" \
-            -alias evolrace \
-            -keypass android \
-            -keystore android/app/evolrace.keystore \
-            -storepass android \
-            -validity 20000 \
-            -keyalg RSA \
-            -keysize 2048
+          # Если secret ANDROID_KEYSTORE_BASE64 задан - используем постоянный keystore
+          # из secret. Иначе генерируем новый (для первой сборки или dev).
+          # Для Play Store нужен ПОСТОЯННЫЙ keystore - иначе SHA1 не совпадёт.
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "Using persistent keystore from GitHub secret"
+            echo "$KEYSTORE_BASE64" | base64 -d > android/app/evolrace.keystore
+            ls -la android/app/evolrace.keystore
+          else
+            echo "WARNING: ANDROID_KEYSTORE_BASE64 secret not set"
+            echo "Generating temporary keystore - this build CANNOT be uploaded to Play Store"
+            echo "(Play Store will reject AAB signed with different key than first upload)"
+            keytool -genkeypair \
+              -dname "cn=Evolrace, ou=Apps, o=TieGames, c=US" \
+              -alias evolrace \
+              -keypass android \
+              -keystore android/app/evolrace.keystore \
+              -storepass android \
+              -validity 20000 \
+              -keyalg RSA \
+              -keysize 2048
+          fi
 
       - name: Print signing fingerprint
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
+          STORE_PASS="${KEYSTORE_PASSWORD:-android}"
+          ALIAS="${KEY_ALIAS:-evolrace}"
+          KEY_PASS="${KEY_PASSWORD:-android}"
           keytool -list -v \
             -keystore android/app/evolrace.keystore \
-            -alias evolrace \
-            -storepass android \
-            -keypass android | grep -E "SHA256:" | head -1
+            -alias "$ALIAS" \
+            -storepass "$STORE_PASS" \
+            -keypass "$KEY_PASS" 2>/dev/null | grep -E "SHA1:|SHA256:" | head -2 || echo "(can't read fingerprint - check passwords)"
 
       - name: Configure Gradle for CI
         working-directory: android
@@ -442,13 +463,20 @@ jobs:
       - name: Build APK
         working-directory: android
         timeout-minutes: 60
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
+          STORE_PASS="${KEYSTORE_PASSWORD:-android}"
+          ALIAS="${KEY_ALIAS:-evolrace}"
+          KEY_PASS="${KEY_PASSWORD:-android}"
           chmod +x gradlew
           ./gradlew assembleRelease \
             -Pandroid.injected.signing.store.file=$(pwd)/app/evolrace.keystore \
-            -Pandroid.injected.signing.store.password=android \
-            -Pandroid.injected.signing.key.alias=evolrace \
-            -Pandroid.injected.signing.key.password=android \
+            -Pandroid.injected.signing.store.password="$STORE_PASS" \
+            -Pandroid.injected.signing.key.alias="$ALIAS" \
+            -Pandroid.injected.signing.key.password="$KEY_PASS" \
             --no-daemon \
             --build-cache
 
@@ -456,12 +484,19 @@ jobs:
         if: success()
         working-directory: android
         timeout-minutes: 30
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
+          STORE_PASS="${KEYSTORE_PASSWORD:-android}"
+          ALIAS="${KEY_ALIAS:-evolrace}"
+          KEY_PASS="${KEY_PASSWORD:-android}"
           ./gradlew bundleRelease \
             -Pandroid.injected.signing.store.file=$(pwd)/app/evolrace.keystore \
-            -Pandroid.injected.signing.store.password=android \
-            -Pandroid.injected.signing.key.alias=evolrace \
-            -Pandroid.injected.signing.key.password=android \
+            -Pandroid.injected.signing.store.password="$STORE_PASS" \
+            -Pandroid.injected.signing.key.alias="$ALIAS" \
+            -Pandroid.injected.signing.key.password="$KEY_PASS" \
             --no-daemon \
             --build-cache
 
