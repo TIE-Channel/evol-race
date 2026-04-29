@@ -39,11 +39,32 @@ const ALL_DEVICES = [
 const DEVICES = SKIP_TABLETS ? [ALL_DEVICES[0]] : ALL_DEVICES;
 
 // Вспомогательная функция: ввод строки символ за символом (для cheat кодов)
+// Используем dispatchEvent напрямую - надёжнее чем page.keyboard.press для headless mode
 async function typeChars(page, str) {
   for (const ch of str) {
-    await page.keyboard.press(ch);
-    await sleep(50);
+    await page.evaluate((c) => {
+      const event = new KeyboardEvent('keydown', {
+        key: c,
+        code: 'Key' + c.toUpperCase(),
+        keyCode: c.charCodeAt(0),
+        which: c.charCodeAt(0),
+        bubbles: true,
+        cancelable: true
+      });
+      document.dispatchEvent(event);
+    }, ch);
+    await sleep(80); // даём event handler время отработать
   }
+  // После cheat-кода даём время на startGame() и переход в RUN
+  await sleep(500);
+}
+
+// Альтернативная функция - запускаем cheat-код через прямой вызов внутренней логики
+// Это использовать если typeChars не работает (например WebView фильтрует synthetic events)
+async function applyCheat(page, levelNum) {
+  // Прямо устанавливаем состояние через _evolrace API + dispatchEvent
+  const padded = String(levelNum).padStart(2, '0');
+  await typeChars(page, 'itted' + padded);
 }
 
 // Вспомогательная: тап на canvas для старта игры
@@ -63,6 +84,20 @@ async function tapCanvas(page) {
   } catch (e) {
     await page.click('canvas').catch(() => {});
   }
+}
+
+// Применяет cheat-код напрямую через _evolrace.applyCheat
+async function applyCheatLevel(page, levelNum) {
+  const result = await page.evaluate((n) => {
+    if (window._evolrace && window._evolrace.applyCheat) {
+      return window._evolrace.applyCheat(n);
+    }
+    return false;
+  }, levelNum);
+  if (!result) {
+    throw new Error(`applyCheat(${levelNum}) failed - _evolrace.applyCheat not available`);
+  }
+  await sleep(300);
 }
 
 // Сценарии скриншотов
@@ -88,7 +123,7 @@ const SCENARIOS = [
         () => window._evolrace && window._evolrace.getState() === 0,
         { timeout: 15000 }
       );
-      await typeChars(page, 'itted01');
+      await applyCheatLevel(page, 1);
       await page.waitForFunction(
         () => window._evolrace && window._evolrace.getState() === 2,
         { timeout: 10000 }
@@ -106,7 +141,7 @@ const SCENARIOS = [
         () => window._evolrace && window._evolrace.getState() === 0,
         { timeout: 15000 }
       );
-      await typeChars(page, 'itted02');
+      await applyCheatLevel(page, 2);
       await page.waitForFunction(
         () => window._evolrace && window._evolrace.getState() === 2,
         { timeout: 10000 }
@@ -124,7 +159,7 @@ const SCENARIOS = [
         () => window._evolrace && window._evolrace.getState() === 0,
         { timeout: 15000 }
       );
-      await typeChars(page, 'itted03');
+      await applyCheatLevel(page, 3);
       await page.waitForFunction(
         () => window._evolrace && window._evolrace.getState() === 2,
         { timeout: 10000 }
@@ -242,7 +277,7 @@ async function recordVideo(device) {
   );
 
   // Cheat itted05 - сразу на интересную стадию (5й уровень)
-  await typeChars(page, 'itted05');
+  await applyCheatLevel(page, 5);
   await page.waitForFunction(
     () => window._evolrace && window._evolrace.getState() === 2,
     { timeout: 10000 }

@@ -375,6 +375,27 @@ document.addEventListener('click', lockOrientation, { once: true });
       // Возвращает t от 0 до 1 (прогресс OUTRO анимации). При не-OUTRO state возвращает 0
       if (state !== STATE.OUTRO || typeof OUTRO_LEN === 'undefined') return 0;
       return 1 - outroTimer / OUTRO_LEN;
+    },
+    // Функция для тестов - применяет cheat-код напрямую (для Puppeteer скриншотов)
+    // Делает то же что cheat 'ittedNN' но без эмуляции keydown событий
+    applyCheat: function(levelNum) {
+      try {
+        if (state === STATE.OVER) resetGame();
+        startGame();
+        const bd = levelNum - 1;
+        bossDefeated = bd;
+        dino.evolution = evoStageForBoss(bd);
+        score = bd * 100;
+        if (levelNum === 19) {
+          outroPendingTimer = 300;
+        } else {
+          cheatBossTimer = 300;
+        }
+        return true;
+      } catch (e) {
+        console.warn('applyCheat error:', e);
+        return false;
+      }
     }
   };
   let introTimer = 0;
