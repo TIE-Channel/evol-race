@@ -4,10 +4,6 @@ on:
   workflow_dispatch:  # ручной запуск
   push:
     branches: [main]
-    paths:
-      - 'index.html'
-      - 'screenshots.js'
-      - '.github/workflows/screenshots.yml'
 
 jobs:
   generate-screenshots:
