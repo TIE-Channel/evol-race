@@ -87,7 +87,8 @@ async function tapCanvas(page) {
 }
 
 // Применяет cheat-код напрямую через _evolrace.applyCheat
-// + Диагностика - возвращает state до и после, чтобы видеть что происходит
+// + skipIntro = true: сразу переходит в RUN минуя INTRO (RAF throttled в headless)
+// + Диагностика - возвращает state до и после
 async function applyCheatLevel(page, levelNum) {
   const result = await page.evaluate((n) => {
     if (!window._evolrace) {
@@ -97,7 +98,8 @@ async function applyCheatLevel(page, levelNum) {
       return { ok: false, error: 'applyCheat function missing - update index.html', stateBefore: window._evolrace.getState() };
     }
     const stateBefore = window._evolrace.getState();
-    const ok = window._evolrace.applyCheat(n);
+    // Передаём skipIntro=true чтобы сразу был state=RUN (не INTRO)
+    const ok = window._evolrace.applyCheat(n, true);
     const stateAfter = window._evolrace.getState();
     return { ok: ok, stateBefore, stateAfter };
   }, levelNum);
@@ -109,7 +111,6 @@ async function applyCheatLevel(page, levelNum) {
   }
   await sleep(500);
 
-  // Проверяем что state стал RUN (2)
   const finalState = await page.evaluate(() => window._evolrace.getState());
   console.log(`    finalState after sleep: ${finalState} (expected 2 for RUN)`);
 
@@ -228,7 +229,11 @@ async function takeScreenshots(device) {
       '--no-sandbox',
       '--disable-setuid-sandbox',
       '--autoplay-policy=no-user-gesture-required',
-      '--disable-features=IsolateOrigins,site-per-process'
+      '--disable-features=IsolateOrigins,site-per-process',
+      // Отключаем throttling background tabs/headless mode
+      '--disable-backgrounding-occluded-windows',
+      '--disable-background-timer-throttling',
+      '--disable-renderer-backgrounding'
     ]
   });
 
@@ -281,7 +286,13 @@ async function recordVideo(device) {
       isMobile: true, hasTouch: true, isLandscape: true,
       deviceScaleFactor: 1
     },
-    args: ['--no-sandbox', '--disable-setuid-sandbox', '--autoplay-policy=no-user-gesture-required']
+    args: [
+      '--no-sandbox', '--disable-setuid-sandbox',
+      '--autoplay-policy=no-user-gesture-required',
+      '--disable-backgrounding-occluded-windows',
+      '--disable-background-timer-throttling',
+      '--disable-renderer-backgrounding'
+    ]
   });
 
   const page = await browser.newPage();

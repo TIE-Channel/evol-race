@@ -378,7 +378,8 @@ document.addEventListener('click', lockOrientation, { once: true });
     },
     // Функция для тестов - применяет cheat-код напрямую (для Puppeteer скриншотов)
     // Делает то же что cheat 'ittedNN' но без эмуляции keydown событий
-    applyCheat: function(levelNum) {
+    // skipIntro = true: сразу переходит в RUN минуя INTRO (для headless tests где RAF throttled)
+    applyCheat: function(levelNum, skipIntro) {
       try {
         if (state === STATE.OVER) resetGame();
         startGame();
@@ -390,6 +391,11 @@ document.addEventListener('click', lockOrientation, { once: true });
           outroPendingTimer = 300;
         } else {
           cheatBossTimer = 300;
+        }
+        // Skip INTRO state - сразу переход в RUN (для headless рендеринга)
+        if (skipIntro && typeof startRun === 'function') {
+          introTimer = 0;
+          startRun();
         }
         return true;
       } catch (e) {
