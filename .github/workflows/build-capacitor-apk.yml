@@ -326,7 +326,7 @@ jobs:
       - name: Configure AdMob and orientation in AndroidManifest
         run: |
           ANDROID_MANIFEST="android/app/src/main/AndroidManifest.xml"
-          ADMOB_APP_ID="ca-app-pub-3940256099942544~3347511713"
+          ADMOB_APP_ID="ca-app-pub-4166550433924758~8711390844"
 
           echo "=== Original AndroidManifest.xml ==="
           cat "$ANDROID_MANIFEST"
