@@ -9872,11 +9872,13 @@ document.addEventListener('click', lockOrientation, { once: true });
       );
 
       // Если уже владеет remove_ads - активируем
-      const product = store.get(IAP_PRODUCT_ID, Platform.GOOGLE_PLAY);
-      if (product && product.owned) {
-        console.log('[IAP] Already owns remove_ads - restoring');
-        activateRemoveAds();
-      }
+      // ВРЕМЕННО ОТКЛЮЧЕНО для тестирования рекламы
+      // const product = store.get(IAP_PRODUCT_ID, Platform.GOOGLE_PLAY);
+      // if (product && product.owned) {
+      //   console.log('[IAP] Already owns remove_ads - restoring');
+      //   activateRemoveAds();
+      // }
+      console.log('[IAP] Auto-restore DISABLED for testing');
     } catch (e) {
       console.warn('[IAP] setupBilling error/timeout:', e.message || e);
     }
