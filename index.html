@@ -2621,7 +2621,7 @@ document.addEventListener('click', lockOrientation, { once: true });
       color: type.color,
       light: type.light,
       dark: type.dark,
-      hp: 2,
+      hp: 3,
       dir: -1,           // входит на экран двигаясь влево
       speedMul: 1,
       modeTimer: 80,
@@ -8014,12 +8014,12 @@ document.addEventListener('click', lockOrientation, { once: true });
         ctx.fillRect(hx + 2, hy + 2, 2, 2);
       }
     }
-    // Сердца босса по центру сверху - 2 жизни
+    // Сердца босса по центру сверху - 3 жизни
     if (activeBoss) {
-      const totalW = 2 * 14 + 1 * 8;
+      const totalW = 3 * 14 + 2 * 8;
       const startX = (W - totalW) / 2;
       const hy = 15;
-      for (let i = 0; i < 2; i++) {
+      for (let i = 0; i < 3; i++) {
         const hx = startX + i * 22;
         const alive = i < activeBoss.hp;
         ctx.fillStyle = alive ? '#9a1828' : '#444';
@@ -9662,6 +9662,16 @@ document.addEventListener('click', lockOrientation, { once: true });
     if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
     // Не пытаемся в cooldown периоде (регион заблокирован - Россия и т.д.)
     if (adsAreCoolingDown()) return;
+    // НЕ запрашиваем рекламу во время активного геймплея (RUN/INTRO/OUTRO)
+    // - сетевые запросы могут вызвать микро-лаги
+    if (window._evolrace && window._evolrace.getState && window._evolrace.STATE) {
+      const s = window._evolrace.getState();
+      const ST = window._evolrace.STATE;
+      if (s === ST.RUN || s === ST.INTRO || s === ST.OUTRO) {
+        console.log('[Ads] Skipping prepareInterstitial during gameplay (state:', s, ')');
+        return;
+      }
+    }
     try {
       const { AdMob } = window.Capacitor.Plugins;
       // Timeout 5 сек - в заблокированных регионах prepareInterstitial может висеть 30+ сек
@@ -9686,6 +9696,15 @@ document.addEventListener('click', lockOrientation, { once: true });
     if (bannerShown) return; // уже показан или в процессе показа
     if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
     if (adsAreCoolingDown()) return;
+    // Banner показывается ТОЛЬКО на READY/OVER - не во время игры
+    if (window._evolrace && window._evolrace.getState && window._evolrace.STATE) {
+      const s = window._evolrace.getState();
+      const ST = window._evolrace.STATE;
+      if (s !== ST.READY && s !== ST.OVER) {
+        console.log('[Ads] Skipping showBannerAd - not on READY/OVER (state:', s, ')');
+        return;
+      }
+    }
     // СРАЗУ ставим флаг до await чтобы predотвратить race condition при polling 200ms
     // (без этого checkGameState вызовет showBannerAd 25 раз за 5 сек pending)
     bannerShown = true;
@@ -9734,6 +9753,15 @@ document.addEventListener('click', lockOrientation, { once: true });
     if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
     // Не пытаемся в cooldown периоде (регион заблокирован)
     if (adsAreCoolingDown()) return;
+    // Interstitial показывается ТОЛЬКО на OVER - никогда во время RUN
+    if (window._evolrace && window._evolrace.getState && window._evolrace.STATE) {
+      const s = window._evolrace.getState();
+      const ST = window._evolrace.STATE;
+      if (s !== ST.OVER) {
+        console.log('[Ads] Skipping showInterstitialAd - not on OVER (state:', s, ')');
+        return;
+      }
+    }
     try {
       const { AdMob } = window.Capacitor.Plugins;
 
