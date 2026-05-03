@@ -9872,13 +9872,11 @@ document.addEventListener('click', lockOrientation, { once: true });
       );
 
       // Если уже владеет remove_ads - активируем
-      // ВРЕМЕННО ОТКЛЮЧЕНО для тестирования рекламы
-      // const product = store.get(IAP_PRODUCT_ID, Platform.GOOGLE_PLAY);
-      // if (product && product.owned) {
-      //   console.log('[IAP] Already owns remove_ads - restoring');
-      //   activateRemoveAds();
-      // }
-      console.log('[IAP] Auto-restore DISABLED for testing');
+      const product = store.get(IAP_PRODUCT_ID, Platform.GOOGLE_PLAY);
+      if (product && product.owned) {
+        console.log('[IAP] Already owns remove_ads - restoring');
+        activateRemoveAds();
+      }
     } catch (e) {
       console.warn('[IAP] setupBilling error/timeout:', e.message || e);
     }
@@ -9931,65 +9929,6 @@ document.addEventListener('click', lockOrientation, { once: true });
   }
 
   removeAdsBtn.addEventListener('click', purchaseRemoveAds);
-
-  // === DEBUG: long press (3 сек) на TIE logo в углу = debug меню ===
-  // Работает ВСЕГДА (даже когда кнопка Remove Ads скрыта)
-  // Позволяет восстановить рекламу для тестирования
-  let tieLongPressTimer = null;
-  function startTieLongPress(e) {
-    if (tieLongPressTimer) clearTimeout(tieLongPressTimer);
-    tieLongPressTimer = setTimeout(() => {
-      e.preventDefault && e.preventDefault();
-      const action = prompt(
-        '[DEBUG MENU]\n\n' +
-        '1 - Reset Remove Ads (вернуть рекламу)\n' +
-        '2 - Activate Remove Ads (test purchase)\n' +
-        '3 - Show current status\n' +
-        'Cancel - закрыть\n\n' +
-        'Введите номер:'
-      );
-      if (action === '1') {
-        adsRemoved = false;
-        localStorage.removeItem('evolrace_ads_removed');
-        alert('Remove Ads reset. Reloading...');
-        location.reload();
-      } else if (action === '2') {
-        activateRemoveAds();
-        purchaseThanks.style.display = 'block';
-        setTimeout(() => purchaseThanks.style.display = 'none', 3000);
-      } else if (action === '3') {
-        alert(
-          'Status:\n' +
-          'adsRemoved: ' + adsRemoved + '\n' +
-          'localStorage: ' + (localStorage.getItem('evolrace_ads_removed') || 'null') + '\n' +
-          'isCapacitor: ' + isCapacitor + '\n' +
-          'state: ' + (window._evolrace ? window._evolrace.getState() : '?')
-        );
-      }
-    }, 3000); // 3 секунды
-  }
-  function cancelTieLongPress(e) {
-    if (tieLongPressTimer) {
-      clearTimeout(tieLongPressTimer);
-      tieLongPressTimer = null;
-    }
-  }
-  const tieCornerEl = document.getElementById('tie-corner-link');
-  if (tieCornerEl) {
-    // Перехватываем клики по long-press чтобы не открыть ссылку
-    tieCornerEl.addEventListener('touchstart', startTieLongPress);
-    tieCornerEl.addEventListener('touchend', cancelTieLongPress);
-    tieCornerEl.addEventListener('touchmove', cancelTieLongPress);
-    tieCornerEl.addEventListener('mousedown', startTieLongPress);
-    tieCornerEl.addEventListener('mouseup', cancelTieLongPress);
-    tieCornerEl.addEventListener('mouseleave', cancelTieLongPress);
-    // Если был long-press и сработал debug menu - blокируем переход по ссылке
-    tieCornerEl.addEventListener('click', (e) => {
-      if (tieLongPressTimer === null && Date.now() - (tieCornerEl._lastLongPressFire || 0) < 500) {
-        e.preventDefault();
-      }
-    });
-  }
 
   // Умная логика interstitial:
   // - Короткий забег (<15 сек) - НЕ показываем (быстрый рестарт без раздражения)
