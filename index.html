@@ -9930,44 +9930,64 @@ document.addEventListener('click', lockOrientation, { once: true });
 
   removeAdsBtn.addEventListener('click', purchaseRemoveAds);
 
-  // === DEBUG: long press (3 сек) на Remove Ads = тестовая покупка ===
-  // Для тестирования UI флоу без настроенного Google Play Billing
-  // (баннер скроется, оверлей оффлайн не появится, кнопка пропадёт)
-  // Двойное нажатие после активации - сброс (для повторного тестирования)
-  let longPressTimer = null;
-  function startLongPress(e) {
-    if (longPressTimer) clearTimeout(longPressTimer);
-    longPressTimer = setTimeout(() => {
-      if (adsRemoved) {
-        // Уже активировано - предлагаем сброс
-        if (confirm('[DEBUG] Reset removed-ads state for re-testing?')) {
-          adsRemoved = false;
-          localStorage.removeItem('evolrace_ads_removed');
-          removeAdsBtn.style.display = 'block';
-          alert('Ads-removed reset. Banner will show again.');
-          location.reload();
-        }
-      } else {
-        if (confirm('[DEBUG] Activate test "Remove Ads" purchase? (no real payment)')) {
-          activateRemoveAds();
-          purchaseThanks.style.display = 'block';
-          setTimeout(() => purchaseThanks.style.display = 'none', 3000);
-        }
+  // === DEBUG: long press (3 сек) на TIE logo в углу = debug меню ===
+  // Работает ВСЕГДА (даже когда кнопка Remove Ads скрыта)
+  // Позволяет восстановить рекламу для тестирования
+  let tieLongPressTimer = null;
+  function startTieLongPress(e) {
+    if (tieLongPressTimer) clearTimeout(tieLongPressTimer);
+    tieLongPressTimer = setTimeout(() => {
+      e.preventDefault && e.preventDefault();
+      const action = prompt(
+        '[DEBUG MENU]\n\n' +
+        '1 - Reset Remove Ads (вернуть рекламу)\n' +
+        '2 - Activate Remove Ads (test purchase)\n' +
+        '3 - Show current status\n' +
+        'Cancel - закрыть\n\n' +
+        'Введите номер:'
+      );
+      if (action === '1') {
+        adsRemoved = false;
+        localStorage.removeItem('evolrace_ads_removed');
+        alert('Remove Ads reset. Reloading...');
+        location.reload();
+      } else if (action === '2') {
+        activateRemoveAds();
+        purchaseThanks.style.display = 'block';
+        setTimeout(() => purchaseThanks.style.display = 'none', 3000);
+      } else if (action === '3') {
+        alert(
+          'Status:\n' +
+          'adsRemoved: ' + adsRemoved + '\n' +
+          'localStorage: ' + (localStorage.getItem('evolrace_ads_removed') || 'null') + '\n' +
+          'isCapacitor: ' + isCapacitor + '\n' +
+          'state: ' + (window._evolrace ? window._evolrace.getState() : '?')
+        );
       }
     }, 3000); // 3 секунды
   }
-  function cancelLongPress() {
-    if (longPressTimer) {
-      clearTimeout(longPressTimer);
-      longPressTimer = null;
+  function cancelTieLongPress(e) {
+    if (tieLongPressTimer) {
+      clearTimeout(tieLongPressTimer);
+      tieLongPressTimer = null;
     }
   }
-  removeAdsBtn.addEventListener('touchstart', startLongPress);
-  removeAdsBtn.addEventListener('touchend', cancelLongPress);
-  removeAdsBtn.addEventListener('touchmove', cancelLongPress);
-  removeAdsBtn.addEventListener('mousedown', startLongPress);
-  removeAdsBtn.addEventListener('mouseup', cancelLongPress);
-  removeAdsBtn.addEventListener('mouseleave', cancelLongPress);
+  const tieCornerEl = document.getElementById('tie-corner-link');
+  if (tieCornerEl) {
+    // Перехватываем клики по long-press чтобы не открыть ссылку
+    tieCornerEl.addEventListener('touchstart', startTieLongPress);
+    tieCornerEl.addEventListener('touchend', cancelTieLongPress);
+    tieCornerEl.addEventListener('touchmove', cancelTieLongPress);
+    tieCornerEl.addEventListener('mousedown', startTieLongPress);
+    tieCornerEl.addEventListener('mouseup', cancelTieLongPress);
+    tieCornerEl.addEventListener('mouseleave', cancelTieLongPress);
+    // Если был long-press и сработал debug menu - blокируем переход по ссылке
+    tieCornerEl.addEventListener('click', (e) => {
+      if (tieLongPressTimer === null && Date.now() - (tieCornerEl._lastLongPressFire || 0) < 500) {
+        e.preventDefault();
+      }
+    });
+  }
 
   // Умная логика interstitial:
   // - Короткий забег (<15 сек) - НЕ показываем (быстрый рестарт без раздражения)
