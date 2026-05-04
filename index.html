@@ -105,6 +105,9 @@
     } else {
       window._splashVisible = false;
     }
+    // Показываем кнопку звука после splash
+    var sb = document.getElementById('sound-btn');
+    if (sb) sb.style.display = 'flex';
   }, 5000);
 </script>
 <div class="rotate-msg">
@@ -499,6 +502,10 @@ document.addEventListener('click', lockOrientation, { once: true });
   let highScore = Number(localStorage.getItem('evolraceHi') || 0);
   let frameCount = 0;
 
+  // === Tutorial counter (для подсказок над первыми кактусами в текущей игре) ===
+  // Сбрасывается каждый run - туториал показывается всегда
+  let runJumpsCount = 0;
+
   // Seeded RNG - один и тот же seed даёт одинаковые препятствия каждую игру
   let rngSeed = 0;
   function srand() {
@@ -744,6 +751,11 @@ document.addEventListener('click', lockOrientation, { once: true });
 
   // --- Аудио / музыка ---
   let audioCtx = null;
+  // Sound mute state (saved in localStorage)
+  let soundEnabled = (() => {
+    try { return localStorage.getItem('evolrace_sound_off') !== '1'; }
+    catch (e) { return true; }
+  })();
   let musicStartTime = 0;
   let lastSteppedAt = -1;
   const BPM = 140;
@@ -918,7 +930,7 @@ document.addEventListener('click', lockOrientation, { once: true });
       postLP.connect(comp);
 
       masterOut = audioCtx.createGain();
-      masterOut.gain.value = 0.85;
+      masterOut.gain.value = soundEnabled ? 0.85 : 0;
       comp.connect(masterOut);
       masterOut.connect(audioCtx.destination);
 
@@ -2203,6 +2215,8 @@ document.addEventListener('click', lockOrientation, { once: true });
       dino.onGround = false;
       dino.onPlatform = null;
       dino.jumpsUsed++;
+      // Tutorial counter - запоминаем что игрок сделал прыжок в этой игре
+      runJumpsCount++;
       if (dino.jumpsUsed === 2) {
         for (let i = 0; i < 8; i++) {
           dust.push({
@@ -2340,6 +2354,8 @@ document.addEventListener('click', lockOrientation, { once: true });
   // Touch handler для мгновенного отклика на мобильных (без 300ms задержки от mousedown emulation)
   canvas.addEventListener('touchstart', (e) => {
     e.preventDefault();
+    // Первый тап - инициализирует audio если ещё не создан (browser policy)
+    if (!audioCtx) initAudio();
     if (audioCtx && audioCtx.state === 'suspended' && !gamePaused) audioCtx.resume();
     if (state === STATE.READY) { startGame(); return; }
     if (state === STATE.OVER) { resetGame(); startGame(); return; }
@@ -2357,6 +2373,10 @@ document.addEventListener('click', lockOrientation, { once: true });
   function resetGame() {
     obstacles.length = 0;
     clouds.length = 0;
+    runJumpsCount = 0; // сброс tutorial counter
+    firstTutorialCactus = null;
+    secondTutorialCactus = null;
+    tutorialCactiSeen = 0;
     poops.length = 0;
     bolts.length = 0;
     unicorns.length = 0;
@@ -2658,11 +2678,18 @@ document.addEventListener('click', lockOrientation, { once: true });
     }
 
     // Коллизия с динозавром
-    if (!dino.riding && collide(b, dino)) {
+    // Используем тонкий хитбокс босса (12px padding по бокам, 8px сверху, 4px снизу)
+    // вместо стандартного 4px - чтобы атаки сбоку не были слишком жадными
+    if (!dino.riding) {
+      const bx = b.x + 12, by = b.y + 8, bw = b.w - 24, bh = b.h - 12;
+      const dx = dino.x + 4, dy = dino.y + 4, dw = dino.w - 8, dh = dino.h - 8;
+      const isCollide = dx < bx + bw && dx + dw > bx && dy < by + bh && dy + dh > by;
+      if (isCollide) {
       const dinoFeet = dino.y + dino.h;
       const bossTop = b.y;
       // Прыжок на голову - босс ПОЛУЧАЕТ УРОН ВСЕГДА (даже когда динозавр мигает)
-      if (dino.vy > 0 && dinoFeet - dino.vy <= bossTop + 8) {
+      // Tolerance 14px - чтобы при быстром падении удар засчитывался
+      if (dino.vy > 0 && dinoFeet - dino.vy <= bossTop + 14) {
         b.hp--;
         b.flinch = 25;
         dino.vy = JUMP_V * 0.9;
@@ -2698,7 +2725,8 @@ document.addEventListener('click', lockOrientation, { once: true });
         // Боковое столкновение - урон только если динозавр не в инвуле
         takeDamage(false);
       }
-    }
+      } // end if (isCollide)
+    } // end if (!dino.riding)
   }
 
   function takeDamage(isPit) {
@@ -4855,6 +4883,123 @@ document.addEventListener('click', lockOrientation, { once: true });
     ctx.fillStyle = C.woodDark;
     ctx.fillRect(b.x - 3, b.y - 1, 3, 2);
     ctx.fillRect(b.x - 3, b.y + 3, 3, 2);
+  }
+
+  // Cached tutorial state (per run)
+  // tutorialCactiSeen - сколько кактусов уже отмечены (макс 2)
+  // После 2 - больше никаких подсказок в этой игре
+  let firstTutorialCactus = null;
+  let secondTutorialCactus = null;
+  let tutorialCactiSeen = 0;
+
+  // === TUTORIAL HINTS ===
+  // Показывается КАЖДУЮ игру: ТОЛЬКО на первых 2 кактусах
+  // Над 1м: одна стрелка "JUMP" (одиночный прыжок)
+  // Над 2м: две стрелки одна над другой - "JUMP" + "DOUBLE JUMP"
+  function drawTutorialHints() {
+    if (state !== STATE.RUN) return;
+    if (dino.riding) return;
+
+    const accent = '#b50026';
+
+    // Если ещё не отметили первый кактус - ищем
+    if (!firstTutorialCactus && tutorialCactiSeen === 0) {
+      for (let i = 0; i < obstacles.length; i++) {
+        const o = obstacles[i];
+        if (!o || o.kind !== 'cactus') continue;
+        if (o.x < dino.x + 20) continue;
+        if (o.x > W) continue;
+        firstTutorialCactus = o;
+        tutorialCactiSeen = 1;
+        break;
+      }
+    }
+    
+    // Если ещё не отметили второй - ищем (только если первый уже найден)
+    if (!secondTutorialCactus && tutorialCactiSeen === 1 && firstTutorialCactus) {
+      for (let i = 0; i < obstacles.length; i++) {
+        const o = obstacles[i];
+        if (!o || o.kind !== 'cactus') continue;
+        if (o === firstTutorialCactus) continue;
+        if (o.x < dino.x + 20) continue;
+        if (o.x > W + 200) continue;
+        secondTutorialCactus = o;
+        tutorialCactiSeen = 2;
+        break;
+      }
+    }
+
+    // Рисуем подсказку над 1м кактусом если он еще существует и видим
+    if (firstTutorialCactus) {
+      // Если кактус давно прошёл (за -100 от dino) - забываем
+      if (firstTutorialCactus.x < dino.x - 100) {
+        firstTutorialCactus = null;
+      } else if (firstTutorialCactus.x > dino.x - 10 && firstTutorialCactus.x < W) {
+        const cx = firstTutorialCactus.x + (firstTutorialCactus.w >> 1);
+        const cy = firstTutorialCactus.y;
+        drawTutorialArrow(cx, cy - 18, 'TAP to JUMP', accent);
+      }
+    }
+
+    // Рисуем 2 подсказки над 2м (одна над другой)
+    if (secondTutorialCactus) {
+      if (secondTutorialCactus.x < dino.x - 100) {
+        secondTutorialCactus = null;
+      } else if (secondTutorialCactus.x > dino.x - 10 && secondTutorialCactus.x < W) {
+        const cx = secondTutorialCactus.x + (secondTutorialCactus.w >> 1);
+        const cy = secondTutorialCactus.y;
+        drawTutorialArrow(cx, cy - 18, 'TAP to JUMP', accent);
+        drawTutorialArrow(cx, cy - 92, 'DOUBLE JUMP', accent);
+      }
+    }
+  }
+
+  // Pre-cached текстовые ширины
+  const _tutorialTextCache = {};
+
+  // Рисует стрелку с текстом - КРУПНЕЕ + оптимизировано
+  function drawTutorialArrow(cx, baseY, label, color) {
+    cx = cx | 0;
+    baseY = baseY | 0;
+
+    // Стрелка - КРУПНАЯ версия (4px шириной палка, 30px высотой)
+    ctx.fillStyle = color;
+    // Палка стрелки 4px wide, 24px tall
+    ctx.fillRect(cx - 2, baseY - 36, 4, 26);
+    // Наконечник (треугольник вниз) - 7 рядов
+    ctx.fillRect(cx - 8, baseY - 10, 17, 1);
+    ctx.fillRect(cx - 7, baseY - 9, 15, 1);
+    ctx.fillRect(cx - 6, baseY - 8, 13, 1);
+    ctx.fillRect(cx - 5, baseY - 7, 11, 1);
+    ctx.fillRect(cx - 4, baseY - 6, 9, 1);
+    ctx.fillRect(cx - 3, baseY - 5, 7, 1);
+    ctx.fillRect(cx - 2, baseY - 4, 5, 1);
+    ctx.fillRect(cx - 1, baseY - 3, 3, 1);
+    ctx.fillRect(cx, baseY - 2, 1, 1);
+
+    // Подпись над стрелкой - КРУПНЕЕ (14px вместо 10)
+    if (!_tutorialTextCache[label]) {
+      ctx.font = 'bold 14px "Courier New", monospace';
+      _tutorialTextCache[label] = ctx.measureText(label).width | 0;
+    }
+    const tw = _tutorialTextCache[label];
+    const labelY = baseY - 56;
+    
+    // Чёрный фон с красной рамкой
+    ctx.fillStyle = '#000';
+    ctx.fillRect(cx - (tw >> 1) - 6, labelY, tw + 12, 18);
+    ctx.fillStyle = color;
+    ctx.fillRect(cx - (tw >> 1) - 6, labelY, tw + 12, 2);
+    ctx.fillRect(cx - (tw >> 1) - 6, labelY + 16, tw + 12, 2);
+    
+    // Текст
+    ctx.font = 'bold 14px "Courier New", monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    ctx.fillStyle = '#fff';
+    ctx.fillText(label, cx, labelY + 2);
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
   }
 
   function drawCactus(o) {
@@ -7995,7 +8140,7 @@ document.addEventListener('click', lockOrientation, { once: true });
     ctx.textAlign = 'right';
     const s = String(Math.floor(score)).padStart(5, '0');
     const hi = String(highScore).padStart(5, '0');
-    ctx.fillText('HI ' + hi + '   ' + s, W - 15, 25);
+    ctx.fillText('HI ' + hi + '   ' + s, W - 80, 25);
     ctx.textAlign = 'left';
     // Сердца жизней слева сверху - динозавр
     for (let i = 0; i < 3; i++) {
@@ -8014,15 +8159,15 @@ document.addEventListener('click', lockOrientation, { once: true });
         ctx.fillRect(hx + 2, hy + 2, 2, 2);
       }
     }
-    // Сердца босса по центру сверху - 3 жизни
+    // Сердца босса по центру СНИЗУ прогресс-шкалы - 3 жизни
     if (activeBoss) {
       const totalW = 3 * 14 + 2 * 8;
       const startX = (W - totalW) / 2;
-      const hy = 15;
+      const hy = 38;
       for (let i = 0; i < 3; i++) {
         const hx = startX + i * 22;
         const alive = i < activeBoss.hp;
-        ctx.fillStyle = alive ? '#9a1828' : '#444';
+        ctx.fillStyle = alive ? '#e63030' : '#555';
         ctx.fillRect(hx + 2, hy, 3, 2);
         ctx.fillRect(hx + 8, hy, 3, 2);
         ctx.fillRect(hx, hy + 2, 13, 4);
@@ -8030,15 +8175,15 @@ document.addEventListener('click', lockOrientation, { once: true });
         ctx.fillRect(hx + 4, hy + 8, 5, 2);
         ctx.fillRect(hx + 5, hy + 10, 3, 1);
         if (alive) {
-          ctx.fillStyle = '#d04050';
+          ctx.fillStyle = '#ff8080';
           ctx.fillRect(hx + 2, hy + 2, 2, 2);
         }
       }
-      // Подпись BOSS
+      // Подпись BOSS - над сердцами поскольку они теперь ниже
       ctx.fillStyle = text();
       ctx.font = 'bold 10px "Courier New", monospace';
       ctx.textAlign = 'center';
-      ctx.fillText('BOSS', W / 2, hy + 22);
+      ctx.fillText('BOSS', W / 2, hy - 4);
       ctx.textAlign = 'left';
     }
     // Прогресс-шкала: от жизней (слева) до очков (справа), с бегущим человечком
@@ -8046,9 +8191,8 @@ document.addEventListener('click', lockOrientation, { once: true });
     const progress = Math.min(bossDefeated, TOTAL_BOSSES);
     // Левая граница - после 3 сердец (15 + 3*22 = 81)
     const livesEndX = 15 + 3 * 22 + 8;
-    // Правая граница - до счётчика очков (W - 15 - текст счёта)
-    // Текст счёта: "HI 00000   00000" - 17 символов * ~10 пикс bold = ~170 пикс
-    const scoreStartX = W - 180;
+    // Правая граница - до счётчика очков (W - 55 - текст счёта ~170)
+    const scoreStartX = W - 250;
     const barX = livesEndX;
     const barW = scoreStartX - barX;
     const barY = 18;
@@ -9048,6 +9192,8 @@ document.addEventListener('click', lockOrientation, { once: true });
       if (o.kind === 'cactus') drawCactus(o);
       else drawBird(o);
     }
+    // Tutorial hints (стрелки над первым/вторым кактусом)
+    drawTutorialHints();
     for (const p of poops) drawPoop(p);
     for (const d of dust) drawDust(d);
     drawDino();
@@ -9383,6 +9529,14 @@ document.addEventListener('click', lockOrientation, { once: true });
       // Это компилирует drawLizard/drawCyborg/drawHead/drawTail/etc
       if (!_cachedLizardSprite) _cachedLizardSprite = createFilteredSprite(drawLizard, 60, 60, 15, 10);
       if (!_cachedCyborgSprite) _cachedCyborgSprite = createFilteredSprite(drawCyborg, 60, 60, 10, 8);
+      
+      // Прогрев drawTutorialArrow - кэшируем measureText для всех текстов
+      try {
+        ctx.save();
+        drawTutorialArrow(-1000, -1000, 'TAP to JUMP', '#b50026');
+        drawTutorialArrow(-1000, -1000, 'DOUBLE JUMP', '#b50026');
+        ctx.restore();
+      } catch (e) {}
 
       // 2. РЕАЛЬНЫЙ ПРОГРЕВ render() - 5 раз вызываем render для текущего состояния (READY)
       // Это компилирует JIT для drawReady, drawSky, drawGround, drawSunMoon, drawCloud, drawIntroFish
@@ -9390,6 +9544,30 @@ document.addEventListener('click', lockOrientation, { once: true });
       for (let i = 0; i < 5; i++) {
         try { render(); } catch (e) {}
       }
+
+      // Прогрев всех функций отрисовки боссов - чтобы первое появление босса не вызывало JIT-лаг
+      try {
+        const bossOff = -1000; // рисуем за пределами экрана - не видно но JIT компилирует
+        for (let bi = 0; bi < BOSS_TYPES.length; bi++) {
+          const t = BOSS_TYPES[bi];
+          const fakeBoss = {
+            type: t.id, x: bossOff, y: bossOff,
+            w: t.w, h: t.h, color: t.color, light: t.light, dark: t.dark,
+            hp: 3, dir: -1, speedMul: 1, modeTimer: 80, flinch: 0, vy: 0,
+            bobPhase: 0, legFrame: 0
+          };
+          try { drawBoss(fakeBoss); } catch (e) {}
+        }
+      } catch (e) {}
+
+      // Прогрев spawn/draw для pits и platforms
+      try {
+        const fakePit = { x: -2000, w: 80 };
+        const fakePlatform = { x: -2000, y: -2000, w: 80, h: 10 };
+        if (typeof drawPit === 'function') drawPit(fakePit);
+        drawPlatform(fakePlatform);
+      } catch (e) {}
+
       // Очищаем canvas чтобы не оставалось артефактов
       try {
         const dpr = (typeof window !== 'undefined' && window.devicePixelRatio) ? window.devicePixelRatio : 1;
@@ -9428,6 +9606,102 @@ document.addEventListener('click', lockOrientation, { once: true });
       console.warn('[Prewarm] error:', e);
     }
   }
+  // === Sound toggle button ===
+  function applySoundState() {
+    // gain устанавливается только если audio УЖЕ создан (initAudio + последующие toggle)
+    // При первой загрузке audioCtx == null - gain установится в initAudio() напрямую
+    if (audioCtx && masterOut) {
+      const target = soundEnabled ? 0.85 : 0;
+      try { masterOut.gain.setTargetAtTime(target, audioCtx.currentTime, 0.02); }
+      catch (e) { masterOut.gain.value = target; }
+    }
+    // UI - всегда обновляем
+    const iconOn = document.getElementById('sound-icon-on');
+    const iconOff = document.getElementById('sound-icon-off');
+    if (iconOn && iconOff) {
+      iconOn.style.display = soundEnabled ? 'block' : 'none';
+      iconOff.style.display = soundEnabled ? 'none' : 'block';
+    }
+    const btn = document.getElementById('sound-btn');
+    if (btn) {
+      btn.style.background = soundEnabled ? 'rgba(0,0,0,0.55)' : 'rgba(180,0,38,0.75)';
+    }
+  }
+  applySoundState();
+  
+  let _soundToggleAt = 0;
+  function toggleSound() {
+    // Debounce - игнорируем double-fire (pointerdown + touchstart на мобильных)
+    const now = Date.now();
+    if (now - _soundToggleAt < 200) return;
+    _soundToggleAt = now;
+
+    // Если audio ещё не инициализирован - это ПЕРВЫЙ user gesture, дающий возможность играть звук.
+    // По умолчанию soundEnabled=true (звук должен играть). НЕ переключаем - просто инициализируем.
+    const isFirstInit = !audioCtx;
+    if (isFirstInit) {
+      initAudio();
+      // Резюмируем suspended audio context (browser policy)
+      if (audioCtx && audioCtx.state === 'suspended') {
+        audioCtx.resume().catch(() => {});
+      }
+      // Устанавливаем gain согласно текущему soundEnabled (без toggle)
+      applySoundState();
+    } else {
+      // Audio уже работает - обычный toggle
+      soundEnabled = !soundEnabled;
+      try {
+        if (soundEnabled) localStorage.removeItem('evolrace_sound_off');
+        else localStorage.setItem('evolrace_sound_off', '1');
+      } catch (ex) {}
+      if (audioCtx && audioCtx.state === 'suspended') {
+        audioCtx.resume().catch(() => {});
+      }
+      applySoundState();
+    }
+
+    const btn = document.getElementById('sound-btn');
+    if (btn) {
+      btn.style.transform = 'scale(0.9)';
+      setTimeout(() => { btn.style.transform = ''; }, 100);
+    }
+  }
+  
+  // Перехват на уровне document с capture: true - срабатывает РАНЬШЕ canvas
+  function isInSoundBtn(target) {
+    let el = target;
+    while (el && el !== document.body) {
+      if (el.id === 'sound-btn') return true;
+      el = el.parentElement;
+    }
+    return false;
+  }
+  // Используем ТОЛЬКО pointerdown - unified event для touch+mouse, без double fire
+  document.addEventListener('pointerdown', (e) => {
+    if (isInSoundBtn(e.target)) {
+      e.stopPropagation();
+      e.preventDefault();
+      toggleSound();
+    }
+  }, { capture: true });
+  // Fallback для браузеров без PointerEvent (старый Safari iOS < 13)
+  if (!window.PointerEvent) {
+    document.addEventListener('touchstart', (e) => {
+      if (isInSoundBtn(e.target)) {
+        e.stopPropagation();
+        e.preventDefault();
+        toggleSound();
+      }
+    }, { capture: true, passive: false });
+  }
+  // Блокируем click чтобы не доходил до canvas / other handlers
+  document.addEventListener('click', (e) => {
+    if (isInSoundBtn(e.target)) {
+      e.stopPropagation();
+      e.preventDefault();
+    }
+  }, { capture: true });
+
   // Запускаем prewarm асинхронно через setTimeout чтобы не блокировать инициализацию
   // Делаем это РАНЬШЕ чем splash скроется (5000ms), чтобы JIT успел прогреться
   setTimeout(prewarmJIT, 200);
@@ -9450,6 +9724,25 @@ document.addEventListener('click', lockOrientation, { once: true });
   padding:8px 16px;background:#1060a0;color:#fff;border:none;border-radius:4px;font-family:sans-serif;
   font-size:13px;cursor:pointer;font-weight:bold;box-shadow:0 2px 6px rgba(0,0,0,0.4);">
   Remove Ads $1.99
+</button>
+
+<!-- Кнопка Sound On/Off - в правом верхнем углу, под очками -->
+<button id="sound-btn" type="button" aria-label="Toggle sound" style="display:none;position:fixed;top:8px;right:8px;z-index:9999;
+  width:35px;height:35px;background:rgba(0,0,0,0.55);color:#fff;border:2px solid #fff;
+  border-radius:50%;cursor:pointer;padding:0;align-items:center;justify-content:center;
+  box-shadow:0 2px 6px rgba(0,0,0,0.4);transition:transform 0.1s ease, background 0.2s ease;
+  -webkit-tap-highlight-color:transparent;touch-action:manipulation;outline:none;
+  user-select:none;-webkit-user-select:none;">
+  <svg id="sound-icon-on" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:block;pointer-events:none;">
+    <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" fill="currentColor"/>
+    <path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>
+    <path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>
+  </svg>
+  <svg id="sound-icon-off" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:none;pointer-events:none;">
+    <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" fill="currentColor"/>
+    <line x1="23" y1="9" x2="17" y2="15"/>
+    <line x1="17" y1="9" x2="23" y2="15"/>
+  </svg>
 </button>
 
 <!-- === OFFLINE OVERLAY === -->
@@ -9621,8 +9914,9 @@ document.addEventListener('click', lockOrientation, { once: true });
       AdMob.addListener('interstitialAdDismissed', () => {
         console.log('[Ads] Interstitial dismissed');
         interstitialLoaded = false;
-        // Сразу готовим следующий
-        prepareInterstitial();
+        // Задержка 5 сек перед загрузкой следующего - чтобы не было сетевой нагрузки
+        // сразу после игры (когда юзер нажимает "Try again")
+        setTimeout(prepareInterstitial, 5000);
       });
 
       // Banner события для отладки + circuit breaker
