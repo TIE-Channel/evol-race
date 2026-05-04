@@ -378,6 +378,20 @@ document.addEventListener('click', lockOrientation, { once: true });
     { id: 'shadow',     w: 94,  h: 96,  color: '#281838', light: '#502858', dark: '#080010' }
   ];
 
+  // Имена боссов для UI индикатора
+  const BOSS_NAMES = {
+    dragon:     'DRAGON',
+    yeti:       'YETI',
+    cyclops:    'CYCLOPS',
+    spider:     'SPIDER',
+    minotaur:   'MINOTAUR',
+    lich:       'LICH',
+    goblinking: 'GOBLIN KING',
+    flame:      'FLAME LORD',
+    ice:        'ICE QUEEN',
+    shadow:     'SHADOW'
+  };
+
   let activeBoss = null;
   let bossDefeated = 0;
   let prevDayPhase = 0.15;
@@ -2678,18 +2692,32 @@ document.addEventListener('click', lockOrientation, { once: true });
     }
 
     // Коллизия с динозавром
-    // Используем тонкий хитбокс босса (12px padding по бокам, 8px сверху, 4px снизу)
-    // вместо стандартного 4px - чтобы атаки сбоку не были слишком жадными
+    // Двойной хитбокс:
+    // - Сверху (для прыжка на голову): полная ширина босса (с минимальным padding 2px)
+    // - Сбоку (для боковых ударов): тонкий хитбокс с 12px padding - меньше "жадности"
     if (!dino.riding) {
-      const bx = b.x + 12, by = b.y + 8, bw = b.w - 24, bh = b.h - 12;
       const dx = dino.x + 4, dy = dino.y + 4, dw = dino.w - 8, dh = dino.h - 8;
-      const isCollide = dx < bx + bw && dx + dw > bx && dy < by + bh && dy + dh > by;
-      if (isCollide) {
       const dinoFeet = dino.y + dino.h;
       const bossTop = b.y;
+      
+      // Сначала проверяем удар сверху (vy > 0 = падает, ноги почти у головы босса)
+      // Полная ширина - чтобы прыжок засчитывался по всей видимой ширине босса
+      const isJumpAttack = dino.vy > 0 && dinoFeet - dino.vy <= bossTop + 14;
+      
+      let isCollide = false;
+      if (isJumpAttack) {
+        // Хитбокс сверху - полная ширина босса (2px padding для small margin)
+        const bx = b.x + 2, by = b.y, bw = b.w - 4, bh = b.h;
+        isCollide = dx < bx + bw && dx + dw > bx && dy < by + bh && dy + dh > by;
+      } else {
+        // Боковой хитбокс - тонкий
+        const bx = b.x + 12, by = b.y + 8, bw = b.w - 24, bh = b.h - 12;
+        isCollide = dx < bx + bw && dx + dw > bx && dy < by + bh && dy + dh > by;
+      }
+      
+      if (isCollide) {
       // Прыжок на голову - босс ПОЛУЧАЕТ УРОН ВСЕГДА (даже когда динозавр мигает)
-      // Tolerance 14px - чтобы при быстром падении удар засчитывался
-      if (dino.vy > 0 && dinoFeet - dino.vy <= bossTop + 14) {
+      if (isJumpAttack) {
         b.hp--;
         b.flinch = 25;
         dino.vy = JUMP_V * 0.9;
@@ -5212,12 +5240,9 @@ document.addEventListener('click', lockOrientation, { once: true });
     ctx.save();
     ctx.translate(b.x + sx, yy + sy);
     ctx.scale(1.2, 1.2);
-    // Дракон нарисован в профиль смотрящим влево, отзеркаливаем чтобы смотрел вправо
-    // Остальные боссы анфас - оставляем как есть
-    if (b.type === 'dragon') {
-      ctx.translate(innerW, 0);
-      ctx.scale(-1, 1);
-    }
+    // Все боссы зеркалируются - смотрят вправо (хотя dino идёт влево от них)
+    ctx.translate(innerW, 0);
+    ctx.scale(-1, 1);
     switch (b.type) {
       case 'dragon':     drawBossDragon(b); break;
       case 'yeti':       drawBossYeti(b); break;
@@ -8183,7 +8208,7 @@ document.addEventListener('click', lockOrientation, { once: true });
       ctx.fillStyle = text();
       ctx.font = 'bold 10px "Courier New", monospace';
       ctx.textAlign = 'center';
-      ctx.fillText('BOSS', W / 2, hy - 4);
+      ctx.fillText(BOSS_NAMES[activeBoss.type] || 'BOSS', W / 2, hy - 4);
       ctx.textAlign = 'left';
     }
     // Прогресс-шкала: от жизней (слева) до очков (справа), с бегущим человечком
