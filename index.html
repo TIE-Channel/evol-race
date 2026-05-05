@@ -542,7 +542,7 @@ document.addEventListener('click', lockOrientation, { once: true });
     vy: 0, ducking: false, onGround: true,
     onPlatform: null, jumpsUsed: 0, legFrame: 0,
     riding: null, rideTime: 0, homeX: DINO_X,
-    lives: 3, invincible: 0,
+    lives: 2, invincible: 0,
     evolution: 0  // 0: ящерица, 1: динозавр, 2: млекопитающее, ... 9: человек будущего
   };
 
@@ -2415,7 +2415,7 @@ document.addEventListener('click', lockOrientation, { once: true });
     dino.jumpsUsed = 0;
     dino.riding = null;
     dino.rideTime = 0;
-    dino.lives = 3;
+    dino.lives = 2;
     dino.invincible = 0;
     dino.evolution = 0;
     speed = 4;
@@ -2642,10 +2642,24 @@ document.addEventListener('click', lockOrientation, { once: true });
     return Math.max(0, stage - 1);
   }
 
+  function bossHpForBoss(n) {
+    // 1-3 (n=0,1,2) = 2 hp
+    // 4-6 (n=3,4,5) = 3 hp
+    // 7-9 (n=6,7,8) = 4 hp
+    // 10 (n=9) = 5 hp
+    // На обратной фазе (n>9) - симметрично
+    const stage = n <= 9 ? n : 18 - n;
+    if (stage <= 2) return 2;
+    if (stage <= 5) return 3;
+    if (stage <= 8) return 4;
+    return 5;
+  }
+
   function spawnBoss() {
     // Тип босса определяется отдельной функцией - на обратной фазе сдвиг
     const bossType = bossTypeForBoss(bossDefeated);
     const type = BOSS_TYPES[bossType];
+    const bossHp = bossHpForBoss(bossDefeated);
     activeBoss = {
       type: type.id,
       x: W + 30,         // появляется за правым краем экрана
@@ -2655,7 +2669,8 @@ document.addEventListener('click', lockOrientation, { once: true });
       color: type.color,
       light: type.light,
       dark: type.dark,
-      hp: 3,
+      hp: bossHp,
+      maxHp: bossHp,
       dir: -1,           // входит на экран двигаясь влево
       speedMul: 1,
       modeTimer: 80,
@@ -2710,8 +2725,8 @@ document.addEventListener('click', lockOrientation, { once: true });
         const bx = b.x + 2, by = b.y, bw = b.w - 4, bh = b.h;
         isCollide = dx < bx + bw && dx + dw > bx && dy < by + bh && dy + dh > by;
       } else {
-        // Боковой хитбокс - тонкий
-        const bx = b.x + 12, by = b.y + 8, bw = b.w - 24, bh = b.h - 12;
+        // Боковой хитбокс - 4px padding с боков
+        const bx = b.x + 4, by = b.y + 8, bw = b.w - 8, bh = b.h - 12;
         isCollide = dx < bx + bw && dx + dw > bx && dy < by + bh && dy + dh > by;
       }
       
@@ -3090,8 +3105,8 @@ document.addEventListener('click', lockOrientation, { once: true });
           }
         } else {
           dino.onGround = false;
-          // Свалился в яму: центр героя ниже верхнего уровня краёв ямы
-          if (dino.y + dino.h / 2 > GROUND_Y) {
+          // Свалился в яму: НИЗ персонажа (ноги) ушёл ниже уровня земли краёв ямы
+          if (dino.y + dino.h > GROUND_Y) {
             dino.lives = 0;
             state = STATE.OVER;
             if (Math.floor(score) > highScore) {
@@ -8167,8 +8182,8 @@ document.addEventListener('click', lockOrientation, { once: true });
     const hi = String(highScore).padStart(5, '0');
     ctx.fillText('HI ' + hi + '   ' + s, W - 80, 25);
     ctx.textAlign = 'left';
-    // Сердца жизней слева сверху - динозавр
-    for (let i = 0; i < 3; i++) {
+    // Сердца жизней слева сверху - динозавр (2 жизни)
+    for (let i = 0; i < 2; i++) {
       const hx = 15 + i * 22;
       const hy = 15;
       const alive = i < dino.lives;
@@ -8184,12 +8199,13 @@ document.addEventListener('click', lockOrientation, { once: true });
         ctx.fillRect(hx + 2, hy + 2, 2, 2);
       }
     }
-    // Сердца босса по центру СНИЗУ прогресс-шкалы - 3 жизни
+    // Сердца босса по центру СНИЗУ прогресс-шкалы - кол-во по maxHp
     if (activeBoss) {
-      const totalW = 3 * 14 + 2 * 8;
+      const maxHp = activeBoss.maxHp || 3;
+      const totalW = maxHp * 14 + (maxHp - 1) * 8;
       const startX = (W - totalW) / 2;
       const hy = 38;
-      for (let i = 0; i < 3; i++) {
+      for (let i = 0; i < maxHp; i++) {
         const hx = startX + i * 22;
         const alive = i < activeBoss.hp;
         ctx.fillStyle = alive ? '#e63030' : '#555';
@@ -8214,8 +8230,8 @@ document.addEventListener('click', lockOrientation, { once: true });
     // Прогресс-шкала: от жизней (слева) до очков (справа), с бегущим человечком
     const TOTAL_BOSSES = 19;
     const progress = Math.min(bossDefeated, TOTAL_BOSSES);
-    // Левая граница - после 3 сердец (15 + 3*22 = 81)
-    const livesEndX = 15 + 3 * 22 + 8;
+    // Левая граница - после 2 сердец
+    const livesEndX = 15 + 2 * 22 + 8;
     // Правая граница - до счётчика очков (W - 55 - текст счёта ~170)
     const scoreStartX = W - 250;
     const barX = livesEndX;
