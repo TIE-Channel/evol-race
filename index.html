@@ -969,6 +969,10 @@ document.addEventListener('click', lockOrientation, { once: true });
   function resumeGame() {
     if (!gamePaused) return;
     gamePaused = false;
+    // Если audioCtx ещё не создан (например, бэкграунд при запуске) - инициализируем
+    if (!audioCtx) {
+      try { initAudio(); } catch (e) {}
+    }
     if (audioCtx) {
       audioCtx.resume().catch(() => {});
       if (state === STATE.RUN) {
@@ -2368,9 +2372,15 @@ document.addEventListener('click', lockOrientation, { once: true });
   // Touch handler для мгновенного отклика на мобильных (без 300ms задержки от mousedown emulation)
   canvas.addEventListener('touchstart', (e) => {
     e.preventDefault();
-    // Первый тап - инициализирует audio если ещё не создан (browser policy)
-    if (!audioCtx) initAudio();
-    if (audioCtx && audioCtx.state === 'suspended' && !gamePaused) audioCtx.resume();
+    // Audio инициализация / резюм при любом тапе на canvas (browser policy требует gesture)
+    if (!audioCtx) {
+      initAudio();
+    }
+    if (audioCtx && audioCtx.state === 'suspended' && !gamePaused) {
+      audioCtx.resume().catch(() => {});
+      // Обновляем UI кнопки звука после resume
+      setTimeout(() => { try { applySoundState(); } catch(e) {} }, 50);
+    }
     if (state === STATE.READY) { startGame(); return; }
     if (state === STATE.OVER) { resetGame(); startGame(); return; }
     if (state === STATE.OUTRO && outroTimer <= 0) {
@@ -9650,7 +9660,6 @@ document.addEventListener('click', lockOrientation, { once: true });
   // === Sound toggle button ===
   function applySoundState() {
     // gain устанавливается только если audio УЖЕ создан (initAudio + последующие toggle)
-    // При первой загрузке audioCtx == null - gain установится в initAudio() напрямую
     if (audioCtx && masterOut) {
       const target = soundEnabled ? 0.85 : 0;
       try { masterOut.gain.setTargetAtTime(target, audioCtx.currentTime, 0.02); }
@@ -9677,11 +9686,12 @@ document.addEventListener('click', lockOrientation, { once: true });
     if (now - _soundToggleAt < 200) return;
     _soundToggleAt = now;
 
-    // Если audio ещё не инициализирован - это ПЕРВЫЙ user gesture, дающий возможность играть звук.
-    // По умолчанию soundEnabled=true (звук должен играть). НЕ переключаем - просто инициализируем.
-    const isFirstInit = !audioCtx;
+    // Если audio ещё не инициализирован ИЛИ suspended (после возврата из background) -
+    // это ПЕРВЫЙ актуальный user gesture для аудио. НЕ toggle, просто инициализируем/резюмируем.
+    // По умолчанию soundEnabled=true (звук должен играть).
+    const isFirstInit = !audioCtx || (audioCtx.state === 'suspended' && soundEnabled);
     if (isFirstInit) {
-      initAudio();
+      if (!audioCtx) initAudio();
       // Резюмируем suspended audio context (browser policy)
       if (audioCtx && audioCtx.state === 'suspended') {
         audioCtx.resume().catch(() => {});
@@ -9746,6 +9756,27 @@ document.addEventListener('click', lockOrientation, { once: true });
   // Запускаем prewarm асинхронно через setTimeout чтобы не блокировать инициализацию
   // Делаем это РАНЬШЕ чем splash скроется (5000ms), чтобы JIT успел прогреться
   setTimeout(prewarmJIT, 200);
+
+  // В Capacitor (Android WebView) AudioContext МОЖНО инициализировать без user gesture
+  // В обычных браузерах - нужен gesture (handles in canvas.touchstart / sound button)
+  // Делаем несколько попыток т.к. Capacitor готовится не мгновенно
+  function tryAutoInitAudio(retries) {
+    if (audioCtx) return; // уже создан
+    if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) {
+      try {
+        initAudio();
+        if (audioCtx && audioCtx.state === 'suspended') {
+          audioCtx.resume().catch(() => {});
+        }
+        applySoundState();
+      } catch (e) {}
+    }
+    if (!audioCtx && retries > 0) {
+      setTimeout(() => tryAutoInitAudio(retries - 1), 500);
+    }
+  }
+  // Первая попытка через 300ms (после Capacitor.Plugins ready), потом ретраи
+  setTimeout(() => tryAutoInitAudio(5), 300);
 
   loop();
 })();
