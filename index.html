@@ -3387,7 +3387,7 @@ document.addEventListener('click', lockOrientation, { once: true });
             dino.y + dino.h > h.y && dino.y < h.y + hh) {
           h.collected = true;
           h.collectFrame = 0;
-          if (dino.lives < 3) dino.lives++;
+          if (dino.lives < 2) dino.lives++;
         }
       } else {
         h.collectFrame = (h.collectFrame || 0) + 1;
@@ -4727,8 +4727,8 @@ document.addEventListener('click', lockOrientation, { once: true });
       case 9: drawCyborg(); break;
       default: drawDinosaur();
     }
-    // Универсальный оверлей-скелет проступает по мере потери жизней
-    const lost = 3 - dino.lives;
+    // Универсальный оверлей-скелет проступает по мере потери жизней (макс 2 жизни)
+    const lost = 2 - dino.lives;
     if (lost > 0) {
       if (dino.ducking && dino.onGround) {
         drawSkeletonOverlayDuck(dino.x, dino.y, lost);
